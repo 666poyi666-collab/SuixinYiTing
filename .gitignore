@@ -1,0 +1,36 @@
+# Local Android build output
+artifacts/
+network-bridge/build/
+network-bridge/deps/
+work/
+reverse/
+tools/
+
+# Signing credentials and local sessions
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+shared_prefs/
+databases/
+
+# Generated binaries and caches
+*.apk
+*.aab
+*.dex
+*.jar
+*.aar
+*.class
+__pycache__/
+*.py[cod]
+
+# Diagnostics and editor files
+*.log
+hs_err_pid*
+replay_pid*
+.idea/
+.vscode/
+*.iml
+Thumbs.db
+.DS_Store
