@@ -26,6 +26,19 @@
 - `docs/bugfixes/`：逐版本 Bug 修复与真机验证记录。
 - `DEVELOPMENT_LOG.md`：开发、操作和需求汇总。
 
+## 项目文档
+
+长期维护从 [文档中心](docs/INDEX.md) 开始：
+
+- [项目长期维护手册](docs/PROJECT_HANDBOOK.md)
+- [用户需求基线](docs/REQUIREMENTS.md)
+- [系统架构](docs/ARCHITECTURE.md)
+- [开发指南](docs/DEVELOPMENT_GUIDE.md)
+- [测试与回归矩阵](docs/QA_REGRESSION.md)
+- [Bug 总表](docs/BUG_CATALOG.md)
+- [发布与回滚](docs/RELEASE_PROCESS.md)
+- [变更与日志规范](docs/CHANGE_MANAGEMENT.md)
+
 ## 构建
 
 构建环境：Windows PowerShell、JDK 8+、Android SDK Platform 35、Build Tools 35.0.0、apktool 3.0.3。
