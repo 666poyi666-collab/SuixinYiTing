@@ -1,6 +1,7 @@
 package com.poyi.suixinyiting.network;
 
 import android.app.Activity;
+import android.app.Application;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -26,14 +27,17 @@ import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.text.Spannable;
-import android.text.SpannableStringBuilder;
+import android.text.SpannableString;
+import android.text.TextUtils;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.RelativeSizeSpan;
 import android.text.style.StyleSpan;
-import android.widget.ImageView;
 import java.lang.ref.WeakReference;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.WeakHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -42,20 +46,37 @@ public final class NetworkPlaybackBridge {
     private static WeakReference<Activity> activityRef = new WeakReference<>(null);
     private static Bundle lastState;
     private static boolean registered;
+    private static boolean lifecycleRegistered;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final ExecutorService ART = Executors.newSingleThreadExecutor();
     private static String requestedCover = "";
     private static Bitmap coverBitmap;
+    private static Bitmap appliedCoverBitmap;
+    private static WeakReference<Activity> appliedCoverActivity = new WeakReference<>(null);
     private static WeakReference<ScrollView> lyricScrollRef = new WeakReference<>(null);
     private static WeakReference<TextView> lyricTextRef = new WeakReference<>(null);
     private static WeakReference<SeekBar> boundSeekRef = new WeakReference<>(null);
+    private static final WeakHashMap<View, String> BOUND_ACTIONS = new WeakHashMap<>();
+    private static final WeakHashMap<View, String> BOUND_QUALITY = new WeakHashMap<>();
+    private static String[] cachedLyricLines = new String[0];
+    private static String cachedLyricText = "";
+    private static int[] cachedLineOffsets = new int[0];
+    private static int cachedLyricRevision = Integer.MIN_VALUE;
+    private static int pendingLyricIndex;
+    private static int renderedLyricIndex = Integer.MIN_VALUE;
+    private static String lyricFallback = "暂无歌词";
+    private static WeakReference<ImageView> playImageRef = new WeakReference<>(null);
+    private static boolean lastPlaying;
+    private static boolean hasPlayingState;
     private static long manualLyricScrollUntil;
     private static int lyricOffset;
     private static boolean seeking;
     private static final Runnable LYRIC_RECENTER = new Runnable() {
         @Override public void run() {
             if (SystemClock.uptimeMillis() < manualLyricScrollUntil) return;
-            autoScroll(lyricScrollRef.get(), lyricTextRef.get(), lyricOffset);
+            TextView text = lyricTextRef.get();
+            renderPendingLyrics(text, true);
+            autoScroll(lyricScrollRef.get(), text, lyricOffset, true);
         }
     };
 
@@ -64,20 +85,45 @@ public final class NetworkPlaybackBridge {
     public static void install(Activity activity) {
         activityRef = new WeakReference<>(activity);
         Log.i(TAG, "install activity=" + activity.getClass().getName());
+        if (!lifecycleRegistered) {
+            activity.getApplication().registerActivityLifecycleCallbacks(
+                    new Application.ActivityLifecycleCallbacks() {
+                        @Override public void onActivityResumed(Activity current) {
+                            if (current == activityRef.get()) setUiActive(current, true);
+                        }
+                        @Override public void onActivityPaused(Activity current) {
+                            if (current == activityRef.get()) setUiActive(current, false);
+                        }
+                        @Override public void onActivityCreated(Activity current, Bundle state) {}
+                        @Override public void onActivityStarted(Activity current) {}
+                        @Override public void onActivityStopped(Activity current) {}
+                        @Override public void onActivitySaveInstanceState(Activity current, Bundle state) {}
+                        @Override public void onActivityDestroyed(Activity current) {}
+                    });
+            lifecycleRegistered = true;
+        }
         if (!registered) {
             activity.getApplicationContext().registerReceiver(new BroadcastReceiver() {
                 @Override public void onReceive(Context context, Intent intent) {
-                    lastState = intent.getExtras();
+                    Bundle incoming = intent.getExtras();
+                    if (incoming == null) return;
+                    if (lastState == null) lastState = new Bundle(incoming);
+                    else lastState.putAll(incoming);
                     apply();
                 }
             }, new IntentFilter(NetworkStreamService.ACTION_STATE));
             registered = true;
         }
-        activity.startService(new Intent(activity, NetworkStreamService.class)
-                .setAction(NetworkStreamService.ACTION_REQUEST_STATE));
+        setUiActive(activity, true);
         apply();
         MAIN.postDelayed(new Runnable() { @Override public void run() { apply(); }}, 300);
         MAIN.postDelayed(new Runnable() { @Override public void run() { apply(); }}, 1000);
+    }
+
+    private static void setUiActive(Activity activity, boolean active) {
+        activity.startService(new Intent(activity, NetworkStreamService.class)
+                .setAction(NetworkStreamService.ACTION_SET_UI_ACTIVE)
+                .putExtra("active", active));
     }
 
     private static void apply() {
@@ -100,21 +146,25 @@ public final class NetworkPlaybackBridge {
         setText(activity, "artist", artistText);
         View artist = find(activity, "artist");
         if (artist != null) {
-            if (artist instanceof TextView && !actualQuality.isEmpty()) {
-                TextView qualityLine = (TextView) artist;
-                qualityLine.setTextSize(8);
-                qualityLine.setSingleLine(false);
-                qualityLine.setMaxLines(2);
-                qualityLine.setEllipsize(null);
-            }
-            final String sourceQuality = actualQuality;
-            final String headphoneQuality = outputCodec;
-            artist.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    NetworkAudioSettings.show(activity, sourceQuality, format,
-                            bitrate, headphoneQuality);
+            String qualityKey = actualQuality + '|' + format + '|' + bitrate + '|' + outputCodec;
+            if (!qualityKey.equals(BOUND_QUALITY.get(artist))) {
+                BOUND_QUALITY.put(artist, qualityKey);
+                if (artist instanceof TextView && !actualQuality.isEmpty()) {
+                    TextView qualityLine = (TextView) artist;
+                    qualityLine.setTextSize(8);
+                    qualityLine.setSingleLine(false);
+                    qualityLine.setMaxLines(2);
+                    qualityLine.setEllipsize(null);
                 }
-            });
+                final String sourceQuality = actualQuality;
+                final String headphoneQuality = outputCodec;
+                artist.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        NetworkAudioSettings.show(activity, sourceQuality, format,
+                                bitrate, headphoneQuality);
+                    }
+                });
+            }
         }
         loadCover(activity, state.getString("cover", ""));
         applyCover(activity);
@@ -122,27 +172,27 @@ public final class NetworkPlaybackBridge {
         View progressView = find(activity, "progress");
         if (progressView instanceof ProgressBar) {
             ProgressBar progress = (ProgressBar) progressView;
-            progress.setMax(Math.max(1, state.getInt("duration", 1)));
-            if (!seeking) progress.setProgress(state.getInt("position", 0));
+            int duration = Math.max(1, state.getInt("duration", 1));
+            if (progress.getMax() != duration) progress.setMax(duration);
+            int position = state.getInt("position", 0);
+            if (!seeking && progress.getProgress() != position) progress.setProgress(position);
             if (progress instanceof SeekBar) bindSeek(activity, (SeekBar) progress);
         }
 
         TextView tip = asText(find(activity, "tip"));
         if (tip != null) {
-            String[] lines = state.getStringArray("lyricAll");
-            int current = state.getInt("lyricCurrent", 0);
             ScrollView lyricScroll = ensureLyricScroller(activity, tip);
-            CharSequence formatted = formatLyrics(
-                    lines, current, state.getString("lyric", "暂无歌词"));
-            tip.setText(formatted);
-            tip.setTextSize(16);
-            tip.setLineSpacing(12, 1f);
-            tip.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+            int revision = state.getInt("lyricRevision", 0);
+            String[] lines = state.getStringArray("lyricAll");
+            if (revision != cachedLyricRevision && lines != null)
+                cacheLyrics(lines, revision);
+            pendingLyricIndex = state.getInt("lyricCurrent", 0);
+            lyricFallback = state.getString("lyric", "暂无歌词");
             tip.setVisibility(View.VISIBLE);
-            if (lines != null && lines.length > 0) {
-                lyricOffset = lineOffset(formatted, current);
-                if (SystemClock.uptimeMillis() >= manualLyricScrollUntil)
-                    autoScroll(lyricScroll, tip, lyricOffset);
+            if (SystemClock.uptimeMillis() >= manualLyricScrollUntil) {
+                boolean changed = renderPendingLyrics(tip, false);
+                if (changed && cachedLyricLines.length > 0)
+                    autoScroll(lyricScroll, tip, lyricOffset, true);
             }
         }
         View lyric1 = find(activity, "lyric_view");
@@ -155,17 +205,25 @@ public final class NetworkPlaybackBridge {
         bindAction(activity, "play", NetworkStreamService.ACTION_TOGGLE);
         View play = find(activity, "play");
         if (play instanceof ImageView) {
-            int drawable = activity.getResources().getIdentifier(
-                    // The mother APK's legacy resources use these two names in reverse.
-                    state.getBoolean("playing", false) ? "ic_default_play" : "ic_default_pause",
-                    "drawable", activity.getPackageName());
-            if (drawable != 0) ((ImageView) play).setImageResource(drawable);
+            boolean playing = state.getBoolean("playing", false);
+            if (playImageRef.get() != play || !hasPlayingState || lastPlaying != playing) {
+                int drawable = activity.getResources().getIdentifier(
+                        // The mother APK's legacy resources use these two names in reverse.
+                        playing ? "ic_default_play" : "ic_default_pause",
+                        "drawable", activity.getPackageName());
+                if (drawable != 0) ((ImageView) play).setImageResource(drawable);
+                playImageRef = new WeakReference<>((ImageView) play);
+                lastPlaying = playing;
+                hasPlayingState = true;
+            }
         }
     }
 
     private static void bindAction(final Activity activity, String idName, final String action) {
         View view = find(activity, idName);
         if (view == null) return;
+        if (action.equals(BOUND_ACTIONS.get(view))) return;
+        BOUND_ACTIONS.put(view, action);
         view.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 activity.startService(new Intent(activity, NetworkStreamService.class).setAction(action));
@@ -204,7 +262,7 @@ public final class NetworkPlaybackBridge {
 
     private static void setText(Activity activity, String id, String value) {
         TextView view = asText(find(activity, id));
-        if (view != null) view.setText(value);
+        if (view != null && !TextUtils.equals(view.getText(), value)) view.setText(value);
     }
 
     private static TextView asText(View view) {
@@ -216,29 +274,45 @@ public final class NetworkPlaybackBridge {
         return id == 0 ? null : activity.findViewById(id);
     }
 
-    private static CharSequence formatLyrics(String[] lines, int current, String fallback) {
-        if (lines == null || lines.length == 0) return fallback;
-        SpannableStringBuilder text = new SpannableStringBuilder();
-        for (int i = 0; i < lines.length; i++) {
-            if (i > 0) text.append("\n");
-            int start = text.length();
-            text.append(lines[i]);
-            int end = text.length();
-            if (i == current) {
-                text.setSpan(new ForegroundColorSpan(Color.WHITE), start, end,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-                text.setSpan(new StyleSpan(Typeface.BOLD), start, end,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-                text.setSpan(new RelativeSizeSpan(1.28f), start, end,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-            } else {
-                text.setSpan(new ForegroundColorSpan(0xff909090), start, end,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-                text.setSpan(new RelativeSizeSpan(0.88f), start, end,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-            }
+    private static void cacheLyrics(String[] lines, int revision) {
+        cachedLyricLines = lines == null ? new String[0] : lines.clone();
+        cachedLineOffsets = new int[cachedLyricLines.length];
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < cachedLyricLines.length; i++) {
+            if (i > 0) text.append('\n');
+            cachedLineOffsets[i] = text.length();
+            text.append(cachedLyricLines[i]);
         }
-        return text;
+        cachedLyricText = text.toString();
+        cachedLyricRevision = revision;
+        renderedLyricIndex = Integer.MIN_VALUE;
+    }
+
+    private static boolean renderPendingLyrics(TextView view, boolean force) {
+        if (view == null) return false;
+        if (!force && SystemClock.uptimeMillis() < manualLyricScrollUntil) return false;
+        if (cachedLyricLines.length == 0) {
+            if (!TextUtils.equals(view.getText(), lyricFallback)) view.setText(lyricFallback);
+            renderedLyricIndex = 0;
+            lyricOffset = 0;
+            return true;
+        }
+        int current = Math.max(0, Math.min(pendingLyricIndex, cachedLyricLines.length - 1));
+        if (renderedLyricIndex == current && view.getText().length() == cachedLyricText.length())
+            return false;
+        SpannableString text = new SpannableString(cachedLyricText);
+        int start = cachedLineOffsets[current];
+        int end = start + cachedLyricLines[current].length();
+        text.setSpan(new ForegroundColorSpan(Color.WHITE), start, end,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(new StyleSpan(Typeface.BOLD), start, end,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(new RelativeSizeSpan(1.45f), start, end,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        view.setText(text);
+        renderedLyricIndex = current;
+        lyricOffset = start;
+        return true;
     }
 
     private static ScrollView ensureLyricScroller(Activity activity, TextView tip) {
@@ -253,6 +327,10 @@ public final class NetworkPlaybackBridge {
         scroll.setFillViewport(false);
         scroll.setFocusable(true);
         scroll.setFocusableInTouchMode(true);
+        tip.setTextSize(14);
+        tip.setLineSpacing(12, 1f);
+        tip.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        tip.setTextColor(0xff909090);
         scroll.setOnTouchListener(new View.OnTouchListener() {
             @Override public boolean onTouch(View view, MotionEvent event) {
                 if (event.getActionMasked() == MotionEvent.ACTION_DOWN
@@ -275,20 +353,12 @@ public final class NetworkPlaybackBridge {
         parent.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
         lyricScrollRef = new WeakReference<>(scroll);
         lyricTextRef = new WeakReference<>(tip);
+        renderedLyricIndex = Integer.MIN_VALUE;
         return scroll;
     }
 
-    private static int lineOffset(CharSequence text, int current) {
-        if (current <= 0) return 0;
-        int seen = 0;
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) == '\n' && ++seen == current) return i + 1;
-        }
-        return 0;
-    }
-
     private static void autoScroll(final ScrollView scroll, final TextView text,
-                                   final int offset) {
+                                   final int offset, final boolean animate) {
         if (scroll == null || text == null) return;
         scroll.post(new Runnable() {
             @Override public void run() {
@@ -309,10 +379,16 @@ public final class NetworkPlaybackBridge {
                 int maxScroll = Math.max(0, text.getHeight() - scroll.getHeight());
                 int target = Math.max(0, Math.min(lineCenter - scroll.getHeight() / 2,
                         maxScroll));
-                scroll.smoothScrollTo(0, target);
+                Rect visible = new Rect();
+                boolean fullyVisible = scroll.getGlobalVisibleRect(visible)
+                        && visible.width() >= scroll.getWidth() * 9 / 10
+                        && visible.height() >= scroll.getHeight() * 9 / 10;
+                if (animate && fullyVisible) scroll.smoothScrollTo(0, target);
+                else scroll.scrollTo(0, target);
                 Log.d(TAG, "lyric center lines=" + line + "-" + lastLine
                         + " target=" + target
-                        + " lineCenter=" + lineCenter + " viewport=" + scroll.getHeight());
+                        + " lineCenter=" + lineCenter + " viewport=" + scroll.getHeight()
+                        + " animate=" + (animate && fullyVisible));
             }
         });
     }
@@ -342,14 +418,27 @@ public final class NetworkPlaybackBridge {
         ART.execute(new Runnable() {
             @Override public void run() {
                 HttpURLConnection connection = null;
+                InputStream input = null;
                 try {
                     connection = (HttpURLConnection) new URL(cover).openConnection();
                     connection.setConnectTimeout(8000);
                     connection.setReadTimeout(8000);
-                    final Bitmap bitmap = BitmapFactory.decodeStream(connection.getInputStream());
+                    input = connection.getInputStream();
+                    byte[] encoded = readBytes(input);
+                    BitmapFactory.Options bounds = new BitmapFactory.Options();
+                    bounds.inJustDecodeBounds = true;
+                    BitmapFactory.decodeByteArray(encoded, 0, encoded.length, bounds);
+                    int target = Math.max(activity.getResources().getDisplayMetrics().widthPixels,
+                            activity.getResources().getDisplayMetrics().heightPixels);
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, target);
+                    options.inPreferredConfig = Bitmap.Config.RGB_565;
+                    final Bitmap bitmap = BitmapFactory.decodeByteArray(
+                            encoded, 0, encoded.length, options);
                     if (bitmap == null) return;
                     coverBitmap = bitmap;
-                    Log.i(TAG, "cover loaded " + bitmap.getWidth() + "x" + bitmap.getHeight());
+                    Log.i(TAG, "cover loaded " + bitmap.getWidth() + "x" + bitmap.getHeight()
+                            + " sample=" + options.inSampleSize);
                     MAIN.post(new Runnable() {
                         @Override public void run() {
                             Activity current = activityRef.get();
@@ -360,6 +449,7 @@ public final class NetworkPlaybackBridge {
                 } catch (Exception e) {
                     Log.w(TAG, "cover failed: " + e.getMessage());
                 } finally {
+                    if (input != null) try { input.close(); } catch (Exception ignored) {}
                     if (connection != null) connection.disconnect();
                 }
             }
@@ -369,6 +459,7 @@ public final class NetworkPlaybackBridge {
     private static void applyCover(Activity activity) {
         Bitmap bitmap = coverBitmap;
         if (bitmap == null) return;
+        if (appliedCoverActivity.get() == activity && appliedCoverBitmap == bitmap) return;
         View blur = find(activity, "blur_view");
         View flowing = find(activity, "flowing_view");
         if (blur instanceof ImageView) ((ImageView) blur).setImageBitmap(bitmap);
@@ -391,5 +482,22 @@ public final class NetworkPlaybackBridge {
             networkCover.setImageBitmap(bitmap);
             networkCover.setVisibility(View.VISIBLE);
         }
+        appliedCoverActivity = new WeakReference<>(activity);
+        appliedCoverBitmap = bitmap;
+    }
+
+    private static byte[] readBytes(InputStream input) throws java.io.IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(128 * 1024);
+        byte[] buffer = new byte[16 * 1024];
+        int read;
+        while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+        return output.toByteArray();
+    }
+
+    private static int sampleSize(int width, int height, int target) {
+        int sample = 1;
+        while (width / (sample * 2) >= target && height / (sample * 2) >= target)
+            sample *= 2;
+        return sample;
     }
 }

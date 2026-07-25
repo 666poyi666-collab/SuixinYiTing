@@ -44,6 +44,8 @@ public final class NetworkStreamService extends Service {
     public static final String ACTION_SEEK = "com.poyi.suixinyiting.network.SEEK";
     public static final String ACTION_REQUEST_STATE =
             "com.poyi.suixinyiting.network.REQUEST_STATE";
+    public static final String ACTION_SET_UI_ACTIVE =
+            "com.poyi.suixinyiting.network.SET_UI_ACTIVE";
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Map<Long, StreamVariant> prefetched = new ConcurrentHashMap<>();
     private MediaPlayer player;
@@ -86,10 +88,13 @@ public final class NetworkStreamService extends Service {
     private Handler mainHandler;
     private long[] lyricTimes = new long[0];
     private String[] lyricLines = new String[0];
+    private int lyricRevision;
+    private boolean uiActive;
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
             broadcastState(true);
-            if (mainHandler != null) mainHandler.postDelayed(this, 1000);
+            if (uiActive && mainHandler != null && player != null && player.isPlaying())
+                mainHandler.postDelayed(this, 1000);
         }
     };
 
@@ -173,7 +178,13 @@ public final class NetworkStreamService extends Service {
         } else if (ACTION_REQUEST_STATE.equals(action)) {
             // Activities may be recreated after the most recent state broadcast.
             // Reply with the live player state instead of leaving the mother UI stale.
-            broadcastState(trackId > 0 || player != null);
+            broadcastState(trackId > 0 || player != null, true);
+        } else if (ACTION_SET_UI_ACTIVE.equals(action)) {
+            uiActive = intent.getBooleanExtra("active", false);
+            Log.i("SuixinNetease", "playback UI active=" + uiActive);
+            boolean playing = player != null && player.isPlaying();
+            updateTicker(uiActive && playing);
+            if (uiActive) broadcastState(trackId > 0 || player != null, true);
         } else if (ACTION_STOP.equals(action)) stopSelf();
         return START_STICKY;
     }
@@ -193,7 +204,8 @@ public final class NetworkStreamService extends Service {
                 + (track == null ? "<missing>" : track.coverUrl));
         lyricTimes = new long[0];
         lyricLines = new String[0];
-        broadcastState(true);
+        lyricRevision++;
+        broadcastState(true, true);
         if (track != null) session.setMetadata(new MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
@@ -211,7 +223,14 @@ public final class NetworkStreamService extends Service {
                 Log.i("SuixinNetease", "resolved track=" + id + " requested="
                         + variant.requestedLevel + " actual=" + variant.actualLevel
                         + " bitrate=" + variant.bitrate + " format=" + variant.format);
-                currentVariant = variant;
+                final StreamVariant resolvedVariant = variant;
+                mainHandler.post(new Runnable() {
+                    @Override public void run() {
+                        if (trackId != id) return;
+                        currentVariant = resolvedVariant;
+                        broadcastState(true, true);
+                    }
+                });
                 final String url = variant.url;
                 final MediaPlayer next = new MediaPlayer();
                 next.setAudioAttributes(new AudioAttributes.Builder()
@@ -227,8 +246,6 @@ public final class NetworkStreamService extends Service {
                         mp.start();
                         if (old != null) { old.stop(); old.release(); }
                         updateState(true); prefetchTwo();
-                        mainHandler.removeCallbacks(ticker);
-                        mainHandler.post(ticker);
                     }
                 });
                 next.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
@@ -284,6 +301,7 @@ public final class NetworkStreamService extends Service {
                         player == null ? 0 : player.getCurrentPosition(), 1f).build();
         session.setPlaybackState(state);
         broadcastState(true);
+        updateTicker(uiActive && playing);
     }
 
     private void seekTo(long requestedPosition) {
@@ -297,6 +315,10 @@ public final class NetworkStreamService extends Service {
     }
 
     private void broadcastState(boolean active) {
+        broadcastState(active, false);
+    }
+
+    private void broadcastState(boolean active, boolean includeLyrics) {
         Intent state = new Intent(ACTION_STATE).setPackage(getPackageName());
         state.putExtra("active", active);
         state.putExtra("track", trackId);
@@ -317,16 +339,9 @@ public final class NetworkStreamService extends Service {
         state.putExtra("position", position);
         state.putExtra("duration", duration);
         state.putExtra("lyric", lyricLine(position, 0));
-        state.putExtra("nextLyric", lyricLine(position, 1));
         int lyricIndex = lyricIndex(position);
-        int from = Math.max(0, lyricIndex - 2);
-        int to = Math.min(lyricLines.length, lyricIndex + 4);
-        String[] lyricWindow = new String[Math.max(0, to - from)];
-        if (lyricWindow.length > 0)
-            System.arraycopy(lyricLines, from, lyricWindow, 0, lyricWindow.length);
-        state.putExtra("lyricWindow", lyricWindow);
-        state.putExtra("lyricWindowCurrent", lyricIndex - from);
-        state.putExtra("lyricAll", lyricLines);
+        state.putExtra("lyricRevision", lyricRevision);
+        if (includeLyrics) state.putExtra("lyricAll", lyricLines);
         state.putExtra("lyricCurrent", lyricIndex);
         sendBroadcast(state);
     }
@@ -348,6 +363,7 @@ public final class NetworkStreamService extends Service {
         lyricTimes = new long[times.size()];
         lyricLines = lines.toArray(new String[0]);
         for (int i = 0; i < times.size(); i++) lyricTimes[i] = times.get(i);
+        lyricRevision++;
     }
 
     private String lyricLine(long position, int delta) {
@@ -358,12 +374,25 @@ public final class NetworkStreamService extends Service {
     }
 
     private int lyricIndex(long position) {
-        int index = 0;
-        for (int i = 0; i < lyricTimes.length; i++) {
-            if (lyricTimes[i] > position) break;
-            index = i;
+        int low = 0;
+        int high = lyricTimes.length - 1;
+        int result = 0;
+        while (low <= high) {
+            int middle = (low + high) >>> 1;
+            if (lyricTimes[middle] <= position) {
+                result = middle;
+                low = middle + 1;
+            } else {
+                high = middle - 1;
+            }
         }
-        return index;
+        return result;
+    }
+
+    private void updateTicker(boolean playing) {
+        if (mainHandler == null) return;
+        mainHandler.removeCallbacks(ticker);
+        if (playing) mainHandler.postDelayed(ticker, 1000);
     }
 
     private void requestAudioFocus() {

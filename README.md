@@ -4,7 +4,7 @@
 
 ## 下载
 
-可安装 APK 位于 [GitHub Releases](../../releases)。当前版本为 `v1.2.9`，包名 `com.poyi.suixinyiting`。
+可安装 APK 位于 [GitHub Releases](../../releases)。当前版本为 `v1.3.0`，包名 `com.poyi.suixinyiting`。
 
 ## 当前能力
 

@@ -14,6 +14,7 @@
 | 1.2.7 | A2DP Codec 变化识别和持久化 | `docs/bugfixes/1.2.7.md` | `artifacts/build/suixinyiting-network-1.2.7.apk` |
 | 1.2.8 | 378px 播放页音质信息完整展示 | `docs/bugfixes/1.2.8.md` | `artifacts/build/suixinyiting-network-1.2.8.apk` |
 | 1.2.9 | 音质面板布局重构和真机验收 | `docs/bugfixes/1.2.9.md` | `artifacts/build/suixinyiting-network-1.2.9.apk` |
+| 1.3.0 | 播放页/歌词页流畅度、内存与暂停功耗优化 | `docs/bugfixes/1.3.0.md` | `artifacts/build/suixinyiting-network-1.3.0.apk` |
 
 跨版本问题、根因、状态和回归锚点统一维护在 `docs/BUG_CATALOG.md`。
 
@@ -29,3 +30,9 @@
 - 音质行与面板不重叠，源/耳机参数完整可见。
 - seek、歌词居中、封面、MediaSession、音量衰减和后台恢复回归通过。
 - 详细证据见 `docs/bugfixes/1.2.9.md` 和 `DEVELOPMENT_LOG.md`。
+
+## 1.3.0 验收摘要
+
+- Janky frames `57.30% → 38.19%`，P95 `150 → 32 ms`，missed vsync `43 → 1`。
+- 稳定 PSS `127,384 → 41,487 KB`，Graphics `20,280 → 6,100 KB`；暂停 10 秒无新增渲染帧，后台播放停止 UI ticker。
+- 歌词触摸滑动、三秒居中、封面、seek、资料库和 MediaSession 回归通过。

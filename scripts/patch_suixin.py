@@ -121,8 +121,8 @@ def patch_brand(root: Path) -> int:
 def patch_version(root: Path) -> None:
     yml = root / "apktool.yml"
     text = yml.read_text(encoding="utf-8")
-    text = re.sub(r"(?m)^  versionCode: .*?$", "  versionCode: 10209", text)
-    text = re.sub(r"(?m)^  versionName: .*?$", "  versionName: 1.2.9", text)
+    text = re.sub(r"(?m)^  versionCode: .*?$", "  versionCode: 10300", text)
+    text = re.sub(r"(?m)^  versionName: .*?$", "  versionName: 1.3.0", text)
     yml.write_text(text, encoding="utf-8", newline="\n")
 
 
