@@ -423,12 +423,14 @@ public final class NetworkMusicActivity extends Activity {
         if (cellular && !getSharedPreferences("network_settings", MODE_PRIVATE)
                 .getBoolean("cellular_confirmed", false)) {
             new android.app.AlertDialog.Builder(this).setTitle("蜂窝高音质播放")
-                    .setMessage("当前默认无损优先，将消耗较多流量。")
+                    .setMessage("播放及后台预缓存会消耗较多流量。")
                     .setNegativeButton("取消", null)
                     .setPositiveButton("继续", new android.content.DialogInterface.OnClickListener() {
                         @Override public void onClick(android.content.DialogInterface d, int w) {
                             getSharedPreferences("network_settings", MODE_PRIVATE).edit()
-                                    .putBoolean("cellular_confirmed", true).apply();
+                                    .putBoolean("cellular_confirmed", true)
+                                    .putBoolean("cellular_prefetch_confirmed", true)
+                                    .putBoolean("cellular_prefetch", true).apply();
                             startTrack(selected);
                         }
                     }).show();

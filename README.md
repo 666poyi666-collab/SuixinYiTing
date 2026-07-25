@@ -4,7 +4,7 @@
 
 ## 下载
 
-可安装 APK 位于 [GitHub Releases](../../releases)。当前版本为 `v1.3.0`，包名 `com.poyi.suixinyiting`。
+可安装 APK 位于 [GitHub Releases](../../releases)。当前版本为 `v1.4.0`，包名 `com.poyi.suixinyiting`。
 
 ## 当前能力
 
@@ -15,6 +15,8 @@
 - Hi-Res、无损、极高、较高、标准首选档位及实际源音质显示。
 - 显示耳机实际蓝牙 Codec、码率、采样率和位深。
 - 系统 MediaSession、通知、音频焦点、媒体按键和系统音量。
+- 默认 512MB 的 256KB 分块持久缓存，支持自适应预缓存和严格 LRU。
+- 播放 generation、后台恢复检查点和耳机断连暂停保证播放状态一致。
 
 ![播放页音质显示](docs/screenshots/verify-1.2.9-player.png)
 
@@ -43,12 +45,12 @@
 
 构建环境：Windows PowerShell、JDK 8+、Android SDK Platform 35、Build Tools 35.0.0、apktool 3.0.3。
 
-1. 将你有权使用的母版 APK 解包到 `work/suixin-apktool/`。
+1. 将有权使用的母版 APK 解包到 `work/suixin-apktool/`。
 2. 将 `apktool.jar` 放到 `tools/apktool.jar`。
-3. 执行：
+3. 设置 Android SDK 和本地签名环境变量后执行构建脚本：
 
 ```powershell
-$env:ANDROID_HOME = 'C:\Android\Sdk'
+$env:ANDROID_HOME = 'C:\path\to\Android\Sdk'
 $env:SUIXIN_KEYSTORE = 'C:\path\to\your.keystore'
 $env:SUIXIN_KEY_ALIAS = 'your-key-alias'
 $env:SUIXIN_KS_PASS = 'your-keystore-password'
@@ -56,7 +58,7 @@ $env:SUIXIN_KEY_PASS = 'your-key-password'
 & scripts\build_suixin_network.ps1
 ```
 
-构建脚本会编译 `network-bridge`、应用 Smali/Manifest 补丁、注入 `classes2.dex`、zipalign 并签名。签名密钥属于本地凭据，不在仓库中；首次构建请在脚本中配置自己的 keystore。使用不同签名覆盖安装会触发 Android 签名不匹配。
+构建脚本会编译 `network-bridge`、应用 Smali/Manifest 补丁、注入 `classes2.dex`、zipalign 并签名。签名密钥属于本地凭据，不在仓库中；使用不同签名覆盖安装会触发 Android 签名不匹配。
 
 ## 已验证设备
 

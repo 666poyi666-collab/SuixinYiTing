@@ -13,17 +13,18 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
+import android.media.AudioDeviceInfo;
 import android.media.MediaPlayer;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -46,13 +47,25 @@ public final class NetworkStreamService extends Service {
             "com.poyi.suixinyiting.network.REQUEST_STATE";
     public static final String ACTION_SET_UI_ACTIVE =
             "com.poyi.suixinyiting.network.SET_UI_ACTIVE";
-    private final ExecutorService io = Executors.newSingleThreadExecutor();
-    private final Map<Long, StreamVariant> prefetched = new ConcurrentHashMap<>();
-    private MediaPlayer player;
+    public static final String ACTION_CLEAR_CACHE =
+            "com.poyi.suixinyiting.network.CLEAR_CACHE";
+    public static final String ACTION_PREFETCH_POLICY_CHANGED =
+            "com.poyi.suixinyiting.network.PREFETCH_POLICY_CHANGED";
+    private final ThreadPoolExecutor io = new ThreadPoolExecutor(2, 2, 30,
+            TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(1),
+            new ThreadPoolExecutor.DiscardOldestPolicy());
+    private final java.util.concurrent.ExecutorService cacheMaintenance =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    private volatile MediaPlayer player;
+    private volatile MediaPlayer preparingPlayer;
+    private volatile RangeCacheDataSource playerSource;
+    private volatile RangeCacheDataSource preparingSource;
     private MediaSession session;
     private NeteaseWebApi api;
     private PlaylistStore store;
     private ShuffleBag shuffle;
+    private AudioCacheStore cache;
+    private AudioPrefetchManager prefetch;
     private AudioManager audioManager;
     private float currentOutputGain = 1f;
     private int gainGeneration;
@@ -76,8 +89,7 @@ public final class NetworkStreamService extends Service {
                 @Override public void onAudioFocusChange(int change) {
                     if (change < 0 && player != null
                             && player.isPlaying()) {
-                        player.pause();
-                        updateState(false);
+                        pausePlayback("");
                     }
                 }
             };
@@ -90,6 +102,22 @@ public final class NetworkStreamService extends Service {
     private String[] lyricLines = new String[0];
     private int lyricRevision;
     private boolean uiActive;
+    private int playGeneration;
+    private PlaybackPhase phase = PlaybackPhase.IDLE;
+    private boolean desiredPlaying;
+    private boolean offlineCached;
+    private String playbackError = "";
+    private String playbackErrorCode = "";
+    private volatile CacheStats lastCacheClear;
+    private boolean restoreAttempted;
+    private int pendingPosition;
+    private final Runnable checkpoint = new Runnable() {
+        @Override public void run() {
+            persistPlayback();
+            if (desiredPlaying && mainHandler != null)
+                mainHandler.postDelayed(this, 15000);
+        }
+    };
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
             broadcastState(true);
@@ -97,13 +125,36 @@ public final class NetworkStreamService extends Service {
                 mainHandler.postDelayed(this, 1000);
         }
     };
+    private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
+                Log.i("SuixinNetease", "audio route became noisy; pausing");
+                pausePlayback("耳机已断开");
+            }
+        }
+    };
+    private final BroadcastReceiver policyReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (prefetch != null) {
+                prefetch.cancel();
+                if (desiredPlaying) schedulePrefetch();
+            }
+        }
+    };
 
     @Override public void onCreate() {
         super.onCreate();
         api = new NeteaseWebApi(this); store = new PlaylistStore(this);
+        cache = AudioCacheStore.get(this); prefetch = new AudioPrefetchManager(this, api, cache);
         mainHandler = new Handler(Looper.getMainLooper());
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         registerReceiver(volumeReceiver, new IntentFilter(VOLUME_CHANGED_ACTION));
+        registerReceiver(noisyReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
+        IntentFilter policy = new IntentFilter();
+        policy.addAction("android.net.conn.CONNECTIVITY_CHANGE");
+        policy.addAction(Intent.ACTION_BATTERY_CHANGED);
+        policy.addAction(android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
+        registerReceiver(policyReceiver, policy);
         outputCodec = getSharedPreferences("network_player", MODE_PRIVATE)
                 .getString("output_codec", "");
         Intent currentCodec = registerReceiver(
@@ -125,15 +176,19 @@ public final class NetworkStreamService extends Service {
                         ? PendingIntent.FLAG_IMMUTABLE : 0)));
         session.setCallback(new MediaSession.Callback() {
             @Override public void onPlay() {
-                if (player != null) { requestAudioFocus(); player.start(); updateState(true); }
+                resumePlayback();
             }
             @Override public void onPause() {
-                if (player != null) { player.pause(); updateState(false); }
+                pausePlayback("");
             }
             @Override public void onSkipToNext() { next(); }
             @Override public void onSkipToPrevious() { previous(); }
             @Override public void onSeekTo(long position) { seekTo(position); }
-            @Override public void onStop() { stopSelf(); }
+            @Override public void onStop() {
+                desiredPlaying = false;
+                persistPlayback();
+                stopSelf();
+            }
         });
         session.setPlaybackToLocal(new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -143,9 +198,11 @@ public final class NetworkStreamService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent == null ? "" : intent.getAction();
+        if (!restoreAttempted && !ACTION_PLAY.equals(action)) restorePlayback();
         if (intent == null) return START_STICKY;
-        String action = intent.getAction();
         if (ACTION_PLAY.equals(action)) {
+            restoreAttempted = true;
             playlistId = intent.getLongExtra("playlist", 0);
             trackId = intent.getLongExtra("track", 0);
             long[] supplied = intent.getLongArrayExtra("source_ids");
@@ -161,18 +218,17 @@ public final class NetworkStreamService extends Service {
             Log.i("SuixinNetease", "shuffle pool=" + fullPool.length);
             shuffle.load(playlistId, fullPool);
             shuffle.select(trackId);
-            play(trackId, 0);
+            beginPlay(trackId, true, 0);
         } else if (ACTION_NEXT.equals(action)) next();
         else if (ACTION_PREVIOUS.equals(action)) previous();
-        else if (ACTION_TOGGLE.equals(action) && player != null) {
-            if (player.isPlaying()) { player.pause(); updateState(false); }
-            else { requestAudioFocus(); player.start(); updateState(true); }
+        else if (ACTION_TOGGLE.equals(action)) {
+            if (desiredPlaying) pausePlayback(""); else resumePlayback();
         } else if (ACTION_SET_QUALITY.equals(action)) {
             String quality = intent.getStringExtra("quality");
             if (quality != null) getSharedPreferences("network_settings", MODE_PRIVATE)
                     .edit().putString("quality", quality).apply();
-            prefetched.clear();
-            if (trackId > 0) play(trackId, 0);
+            prefetch.cancel();
+            if (trackId > 0) beginPlay(trackId, desiredPlaying, currentPosition(), true);
         } else if (ACTION_SEEK.equals(action)) {
             seekTo(intent.getIntExtra("position", 0));
         } else if (ACTION_REQUEST_STATE.equals(action)) {
@@ -185,16 +241,65 @@ public final class NetworkStreamService extends Service {
             boolean playing = player != null && player.isPlaying();
             updateTicker(uiActive && playing);
             if (uiActive) broadcastState(trackId > 0 || player != null, true);
-        } else if (ACTION_STOP.equals(action)) stopSelf();
+        } else if (ACTION_CLEAR_CACHE.equals(action)) {
+            prefetch.cancel();
+            cacheMaintenance.execute(new Runnable() { @Override public void run() {
+                final CacheStats cleared = cache.clearInactive();
+                lastCacheClear = cleared;
+                Log.i("SuixinCache", "clear bytes=" + cleared.clearedBytes
+                        + " pending=" + cleared.pendingBytes);
+                if (mainHandler != null) mainHandler.post(new Runnable() {
+                    @Override public void run() {
+                        broadcastState(trackId > 0 || player != null, true);
+                    }
+                });
+            }});
+        } else if (ACTION_PREFETCH_POLICY_CHANGED.equals(action)) {
+            prefetch.cancel();
+            cacheMaintenance.execute(new Runnable() { @Override public void run() {
+                cache.enforceLimit();
+                if (desiredPlaying && mainHandler != null) mainHandler.post(new Runnable() {
+                    @Override public void run() { schedulePrefetch(); }
+                });
+            }});
+        } else if (ACTION_STOP.equals(action)) {
+            desiredPlaying = false;
+            persistPlayback();
+            stopSelf();
+        }
         return START_STICKY;
     }
 
-    private void next() { long id = shuffle.next(); if (id > 0) play(id, 0); }
-    private void previous() { long id = shuffle.previous(); if (id > 0) play(id, 0); }
+    private void next() { long id = shuffle.next(); if (id > 0) beginPlay(id, true, 0); }
+    private void previous() { long id = shuffle.previous(); if (id > 0) beginPlay(id, true, 0); }
 
-    private void play(final long id, final int retry) {
+    private void beginPlay(final long id, boolean shouldPlay, int resumePosition) {
+        beginPlay(id, shouldPlay, resumePosition, false);
+    }
+
+    private void beginPlay(final long id, boolean shouldPlay, int resumePosition,
+                           boolean forceOnline) {
+        final int generation = ++playGeneration;
+        desiredPlaying = shouldPlay;
+        pendingPosition = Math.max(0, resumePosition);
+        prefetch.cancel();
+        if (preparingPlayer != null) releaseCandidate(preparingPlayer);
+        if (player != null) {
+            MediaPlayer old = player; RangeCacheDataSource oldSource = playerSource;
+            player = null; playerSource = null;
+            releasePlayer(old, oldSource);
+        }
+        play(id, 0, generation, resumePosition, forceOnline);
+    }
+
+    private void play(final long id, final int retry, final int generation,
+                      final int resumePosition, final boolean forceOnline) {
+        if (generation != playGeneration) return;
         trackId = id;
-        Log.i("SuixinNetease", "play track=" + id + " retry=" + retry);
+        phase = PlaybackPhase.RESOLVING; offlineCached = false; playbackError = "";
+        playbackErrorCode = "";
+        Log.i("SuixinNetease", "play track=" + id + " retry=" + retry
+                + " generation=" + generation);
         NetworkTrack found = store.find(playlistId, id);
         if (found == null) found = store.findAny(id);
         final NetworkTrack track = found;
@@ -213,75 +318,260 @@ public final class NetworkStreamService extends Service {
         startForeground(7, notification(track == null ? "网络音乐" : track.title,
                 track == null ? "正在连接…" : track.artist));
         io.execute(new Runnable() { @Override public void run() {
+            RangeCacheDataSource source = null;
+            MediaPlayer candidate = null;
             try {
-                StreamVariant variant = prefetched.remove(id);
-                if (variant == null || variant.expiresAt < System.currentTimeMillis() + 30000)
-                    variant = api.resolve(id, getSharedPreferences("network_settings", MODE_PRIVATE)
-                            .getString("quality", "lossless"));
-                try { parseLyric(api.lyric(id)); }
+                String requested = getSharedPreferences("network_settings", MODE_PRIVATE)
+                        .getString("quality", "lossless");
+                source = forceOnline ? null : RangeCacheDataSource.openOffline(cache, id);
+                boolean offlineValue = source != null;
+                StreamVariant variant;
+                if (offlineValue) {
+                    AudioCacheKey key = source.entry().key;
+                    variant = new StreamVariant("", requested, key.quality, 0, key.format,
+                            Long.MAX_VALUE, "完整缓存");
+                } else {
+                    try {
+                        variant = api.resolve(id, requested);
+                        if (generation != playGeneration) { source = close(source); return; }
+                        source = new RangeCacheDataSource(cache, id, variant);
+                    } catch (Exception onlineError) {
+                        source = RangeCacheDataSource.openCached(cache, id);
+                        if (source == null) throw onlineError;
+                        AudioCacheKey key = source.entry().key;
+                        variant = new StreamVariant("", requested, key.quality, 0, key.format,
+                                Long.MAX_VALUE, source.entry().isComplete()
+                                ? "完整缓存" : "部分缓存");
+                        offlineValue = true;
+                    }
+                }
+                final boolean offline = offlineValue;
+                LyricData lyric = LyricData.empty();
+                try { lyric = parseLyricData(api.lyric(id)); }
                 catch (Exception e) { Log.w("SuixinNetease", "lyric failed: " + e.getMessage()); }
+                if (generation != playGeneration) { source = close(source); return; }
                 Log.i("SuixinNetease", "resolved track=" + id + " requested="
                         + variant.requestedLevel + " actual=" + variant.actualLevel
-                        + " bitrate=" + variant.bitrate + " format=" + variant.format);
+                        + " bitrate=" + variant.bitrate + " format=" + variant.format
+                        + " offline=" + offline);
                 final StreamVariant resolvedVariant = variant;
+                final LyricData resolvedLyric = lyric;
                 mainHandler.post(new Runnable() {
                     @Override public void run() {
-                        if (trackId != id) return;
+                        if (generation != playGeneration || trackId != id) return;
                         currentVariant = resolvedVariant;
+                        lyricTimes = resolvedLyric.times;
+                        lyricLines = resolvedLyric.lines;
+                        lyricRevision++;
+                        offlineCached = offline;
+                        phase = offline ? PlaybackPhase.OFFLINE_CACHED : PlaybackPhase.BUFFERING;
                         broadcastState(true, true);
                     }
                 });
-                final String url = variant.url;
-                final MediaPlayer next = new MediaPlayer();
-                next.setAudioAttributes(new AudioAttributes.Builder()
+                final RangeCacheDataSource candidateSource = source;
+                final MediaPlayer nextPlayer = new MediaPlayer();
+                candidate = nextPlayer;
+                preparingPlayer = nextPlayer; preparingSource = candidateSource;
+                nextPlayer.setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build());
-                next.setDataSource(new RangeCacheDataSource(new java.io.File(getCacheDir(), "network_audio"), id, url));
-                next.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+                nextPlayer.setDataSource(candidateSource);
+                nextPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                     @Override public void onPrepared(MediaPlayer mp) {
-                        Log.i("SuixinNetease", "prepared track=" + id);
-                        requestAudioFocus();
-                        MediaPlayer old = player; player = mp;
+                        if (generation != playGeneration || mp != preparingPlayer) {
+                            releasePlayer(mp, candidateSource); return;
+                        }
+                        Log.i("SuixinNetease", "prepared track=" + id
+                                + " generation=" + generation);
+                        MediaPlayer old = player; RangeCacheDataSource oldSource = playerSource;
+                        player = mp; playerSource = candidateSource;
+                        preparingPlayer = null; preparingSource = null;
                         applyOutputGain(false);
-                        mp.start();
-                        if (old != null) { old.stop(); old.release(); }
-                        updateState(true); prefetchTwo();
+                        if (resumePosition > 0) {
+                            pendingPosition = Math.min(resumePosition, mp.getDuration());
+                            mp.seekTo(pendingPosition);
+                        } else pendingPosition = 0;
+                        if (desiredPlaying) { requestAudioFocus(); mp.start(); }
+                        if (old != null && old != mp) releasePlayer(old, oldSource);
+                        phase = desiredPlaying
+                                ? (offline ? PlaybackPhase.OFFLINE_CACHED : PlaybackPhase.PLAYING)
+                                : PlaybackPhase.PAUSED;
+                        updateState(desiredPlaying);
+                        persistPlayback();
+                        if (desiredPlaying) schedulePrefetch();
                     }
                 });
-                next.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-                    @Override public void onCompletion(MediaPlayer mp) { next(); }
+                nextPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                    @Override public void onCompletion(MediaPlayer mp) {
+                        if (generation == playGeneration && mp == player) next();
+                    }
                 });
-                next.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+                nextPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                     @Override public boolean onError(MediaPlayer mp, int what, int extra) {
+                        if (generation != playGeneration) {
+                            releasePlayer(mp, candidateSource); return true;
+                        }
                         Log.e("SuixinNetease", "media error track=" + id + " what=" + what
                                 + " extra=" + extra + " retry=" + retry);
-                        prefetched.remove(id);
-                        if (retry < 1) {
-                            if (player == mp) player = null;
-                            try { mp.reset(); mp.release(); } catch (Exception ignored) {}
-                            play(id, retry + 1);
+                        if (retry < 1 && !offline) {
+                            releasePlayer(mp, candidateSource);
+                            play(id, retry + 1, generation, resumePosition, forceOnline);
                             return true;
                         }
-                        return false;
+                        failPlayback(generation, offline
+                                ? "网络不可用，缓存内容不足" : "歌曲加载失败");
+                        return true;
                     }
                 });
-                next.prepareAsync();
+                nextPlayer.prepareAsync();
             } catch (Exception e) {
                 Log.e("SuixinNetease", "play failed track=" + id + " retry=" + retry, e);
-                stopForeground(false);
+                if (candidate != null) releasePlayer(candidate, source); else close(source);
+                failPlayback(generation, e.getMessage() == null ? "歌曲加载失败" : e.getMessage());
             }
         }});
     }
 
-    private void prefetchTwo() {
-        io.execute(new Runnable() { @Override public void run() {
-            long[] ids = shuffle.peekNext(2);
-            String quality = getSharedPreferences("network_settings", MODE_PRIVATE)
-                    .getString("quality", "lossless");
-            for (long id : ids) {
-                try { prefetched.put(id, api.resolve(id, quality)); } catch (Exception ignored) {}
+    private void schedulePrefetch() {
+        if (prefetch == null || shuffle == null) return;
+        prefetch.schedule(shuffle.peekNext(256),
+                getSharedPreferences("network_settings", MODE_PRIVATE)
+                        .getString("quality", "lossless"), playGeneration);
+    }
+
+    private void pausePlayback(String reason) {
+        desiredPlaying = false;
+        MediaPlayer active = player;
+        if (active != null && safePlaying(active)) {
+            try { active.pause(); } catch (Exception ignored) {}
+        }
+        phase = trackId > 0 ? PlaybackPhase.PAUSED : PlaybackPhase.IDLE;
+        if (reason != null && !reason.isEmpty()) playbackError = reason;
+        if (prefetch != null) prefetch.cancel();
+        if (audioManager != null) audioManager.abandonAudioFocus(focusListener);
+        persistPlayback();
+        updateState(false);
+    }
+
+    private void resumePlayback() {
+        desiredPlaying = true;
+        playbackError = ""; playbackErrorCode = "";
+        MediaPlayer active = player;
+        if (active == null) {
+            if (trackId > 0) beginPlay(trackId, true, currentPosition());
+            return;
+        }
+        try {
+            requestAudioFocus();
+            active.start();
+            phase = offlineCached ? PlaybackPhase.OFFLINE_CACHED : PlaybackPhase.PLAYING;
+            updateState(true);
+            schedulePrefetch();
+        } catch (Exception error) {
+            failPlayback(playGeneration, "播放恢复失败");
+        }
+    }
+
+    private void failPlayback(final int generation, final String message) {
+        if (mainHandler != null && Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(new Runnable() { @Override public void run() {
+                failPlayback(generation, message);
+            }});
+            return;
+        }
+        if (generation != playGeneration) return;
+        desiredPlaying = false;
+        playbackError = message == null || message.isEmpty() ? "歌曲加载失败" : message;
+        playbackErrorCode = playbackError.contains("缓存") ? "CACHE_GAP" : "PLAYBACK_FAILED";
+        phase = PlaybackPhase.ERROR;
+        if (preparingPlayer != null) releaseCandidate(preparingPlayer);
+        updateState(false);
+        persistPlayback();
+    }
+
+    private int currentPosition() {
+        MediaPlayer active = player;
+        if (active != null) try {
+            pendingPosition = Math.max(0, active.getCurrentPosition());
+            return pendingPosition;
+        }
+        catch (Exception ignored) {}
+        return pendingPosition;
+    }
+
+    private void persistPlayback() {
+        if (trackId <= 0) return;
+        getSharedPreferences("network_player", MODE_PRIVATE).edit()
+                .putLong("last_playlist", playlistId)
+                .putLong("restore_track", trackId)
+                .putInt("restore_position", currentPosition())
+                .putBoolean("restore_desired_playing", desiredPlaying)
+                .putLong("restore_saved_at", System.currentTimeMillis())
+                .apply();
+    }
+
+    private void restorePlayback() {
+        if (restoreAttempted) return;
+        restoreAttempted = true;
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("network_player", MODE_PRIVATE);
+        long restoredTrack = prefs.getLong("restore_track", 0);
+        if (restoredTrack <= 0) return;
+        playlistId = prefs.getLong("last_playlist", 0);
+        long[] queue = decodeIds(prefs.getString("last_queue_ids", ""));
+        if (queue.length == 0) queue = store.allPlayableIds(playlistId);
+        shuffle.load(playlistId, queue);
+        trackId = restoredTrack;
+        boolean resume = prefs.getBoolean("restore_desired_playing", false)
+                && hasHeadphoneRoute();
+        int position = Math.max(0, prefs.getInt("restore_position", 0));
+        Log.i("SuixinNetease", "restore track=" + trackId + " position=" + position
+                + " desired=" + resume + " headphones=" + hasHeadphoneRoute());
+        beginPlay(trackId, resume, position);
+    }
+
+    private boolean hasHeadphoneRoute() {
+        if (audioManager == null) return false;
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            AudioDeviceInfo[] devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+            for (AudioDeviceInfo device : devices) {
+                int type = device.getType();
+                if (type == AudioDeviceInfo.TYPE_WIRED_HEADSET
+                        || type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+                        || type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+                        || type == AudioDeviceInfo.TYPE_USB_DEVICE
+                        || type == AudioDeviceInfo.TYPE_USB_HEADSET
+                        || (android.os.Build.VERSION.SDK_INT >= 31
+                        && type == AudioDeviceInfo.TYPE_BLE_HEADSET)) return true;
             }
-        }});
+        }
+        return audioManager.isWiredHeadsetOn() || audioManager.isBluetoothA2dpOn();
+    }
+
+    private static boolean safePlaying(MediaPlayer value) {
+        if (value == null) return false;
+        try { return value.isPlaying(); } catch (Exception ignored) { return false; }
+    }
+
+    private void releaseCandidate(MediaPlayer candidate) {
+        RangeCacheDataSource source = candidate == preparingPlayer ? preparingSource : null;
+        if (candidate == preparingPlayer) {
+            preparingPlayer = null; preparingSource = null;
+        }
+        releasePlayer(candidate, source);
+    }
+
+    private static void releasePlayer(MediaPlayer value, RangeCacheDataSource source) {
+        if (value != null) {
+            try { value.reset(); } catch (Exception ignored) {}
+            try { value.release(); } catch (Exception ignored) {}
+        }
+        close(source);
+    }
+
+    private static RangeCacheDataSource close(RangeCacheDataSource source) {
+        if (source != null) try { source.close(); } catch (Exception ignored) {}
+        return null;
     }
 
     private void updateState(boolean playing) {
@@ -290,18 +580,31 @@ public final class NetworkStreamService extends Service {
                     + audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) + "/"
                     + audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
         }
-        android.media.session.PlaybackState state = new android.media.session.PlaybackState.Builder()
+        int stateCode = phase == PlaybackPhase.ERROR
+                ? android.media.session.PlaybackState.STATE_ERROR
+                : playing ? android.media.session.PlaybackState.STATE_PLAYING
+                : phase == PlaybackPhase.BUFFERING || phase == PlaybackPhase.RESOLVING
+                ? android.media.session.PlaybackState.STATE_BUFFERING
+                : android.media.session.PlaybackState.STATE_PAUSED;
+        android.media.session.PlaybackState.Builder stateBuilder =
+                new android.media.session.PlaybackState.Builder()
                 .setActions(android.media.session.PlaybackState.ACTION_PLAY |
                         android.media.session.PlaybackState.ACTION_PAUSE |
                         android.media.session.PlaybackState.ACTION_SEEK_TO |
                         android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT |
                         android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS)
-                .setState(playing ? android.media.session.PlaybackState.STATE_PLAYING :
-                        android.media.session.PlaybackState.STATE_PAUSED,
-                        player == null ? 0 : player.getCurrentPosition(), 1f).build();
-        session.setPlaybackState(state);
+                .setState(stateCode, currentPosition(), playing ? 1f : 0f);
+        if (phase == PlaybackPhase.ERROR) stateBuilder.setErrorMessage(playbackError);
+        session.setPlaybackState(stateBuilder.build());
         broadcastState(true);
         updateTicker(uiActive && playing);
+        if (mainHandler != null) {
+            mainHandler.removeCallbacks(checkpoint);
+            if (desiredPlaying) mainHandler.postDelayed(checkpoint, 15000);
+        }
+        String title = currentTrack == null ? "网络音乐" : currentTrack.title;
+        String subtitle = currentTrack == null ? "" : currentTrack.artist;
+        startForeground(7, notification(title, subtitle));
     }
 
     private void seekTo(long requestedPosition) {
@@ -309,9 +612,11 @@ public final class NetworkStreamService extends Service {
         if (active == null) return;
         int duration = active.getDuration();
         int position = (int) Math.max(0, Math.min(requestedPosition, duration));
+        pendingPosition = position;
         active.seekTo(position);
         Log.i("SuixinNetease", "seek position=" + position + " duration=" + duration);
         updateState(active.isPlaying());
+        persistPlayback();
     }
 
     private void broadcastState(boolean active) {
@@ -332,9 +637,18 @@ public final class NetworkStreamService extends Service {
         state.putExtra("format", variant == null ? "" : variant.format);
         state.putExtra("qualityReason", variant == null ? "" : variant.fallbackReason);
         state.putExtra("outputCodec", outputCodec);
-        boolean playing = player != null && player.isPlaying();
-        int position = player == null ? 0 : player.getCurrentPosition();
-        int duration = player == null ? 0 : player.getDuration();
+        state.putExtra("phase", phase.name());
+        state.putExtra("generation", playGeneration);
+        state.putExtra("offlineCached", offlineCached);
+        state.putExtra("errorCode", playbackErrorCode);
+        state.putExtra("errorMessage", playbackError);
+        state.putExtra("buffering", phase == PlaybackPhase.RESOLVING
+                || phase == PlaybackPhase.BUFFERING);
+        boolean playing = safePlaying(player);
+        int position = currentPosition();
+        int duration = 0;
+        if (player != null) try { duration = Math.max(0, player.getDuration()); }
+        catch (Exception ignored) {}
         state.putExtra("playing", playing);
         state.putExtra("position", position);
         state.putExtra("duration", duration);
@@ -343,10 +657,24 @@ public final class NetworkStreamService extends Service {
         state.putExtra("lyricRevision", lyricRevision);
         if (includeLyrics) state.putExtra("lyricAll", lyricLines);
         state.putExtra("lyricCurrent", lyricIndex);
+        if (cache != null) {
+            CacheStats stats = cache.stats();
+            state.putExtra("cacheBytes", stats.bytes);
+            state.putExtra("cacheLimitBytes", stats.limitBytes);
+            state.putExtra("cacheFiles", stats.files);
+            state.putExtra("cacheComplete", stats.complete);
+            state.putExtra("cachePartial", stats.partial);
+        }
+        CacheStats cleared = lastCacheClear;
+        if (cleared != null) {
+            state.putExtra("cacheClearedBytes", cleared.clearedBytes);
+            state.putExtra("cachePendingBytes", cleared.pendingBytes);
+            state.putExtra("cacheFailedBytes", cleared.failedBytes);
+        }
         sendBroadcast(state);
     }
 
-    private void parseLyric(String raw) {
+    private static LyricData parseLyricData(String raw) {
         ArrayList<Long> times = new ArrayList<>();
         ArrayList<String> lines = new ArrayList<>();
         Pattern pattern = Pattern.compile("\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)");
@@ -360,10 +688,17 @@ public final class NetworkStreamService extends Service {
             times.add(minute * 60000L + (long) (second * 1000.0));
             lines.add(text);
         }
-        lyricTimes = new long[times.size()];
-        lyricLines = lines.toArray(new String[0]);
-        for (int i = 0; i < times.size(); i++) lyricTimes[i] = times.get(i);
-        lyricRevision++;
+        long[] parsedTimes = new long[times.size()];
+        String[] parsedLines = lines.toArray(new String[0]);
+        for (int i = 0; i < times.size(); i++) parsedTimes[i] = times.get(i);
+        return new LyricData(parsedTimes, parsedLines);
+    }
+
+    private static final class LyricData {
+        final long[] times;
+        final String[] lines;
+        LyricData(long[] times, String[] lines) { this.times = times; this.lines = lines; }
+        static LyricData empty() { return new LyricData(new long[0], new String[0]); }
     }
 
     private String lyricLine(long position, int delta) {
@@ -405,7 +740,7 @@ public final class NetworkStreamService extends Service {
         int volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
         int max = Math.max(1, audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
         if (volume <= 0) return 0f;
-        return 0.30f + 0.70f * volume / max;
+        return volume / (float) max;
     }
 
     private static String codecLabel(BluetoothCodecConfig config) {
@@ -510,13 +845,24 @@ public final class NetworkStreamService extends Service {
     }
 
     @Override public void onDestroy() {
-        if (mainHandler != null) mainHandler.removeCallbacks(ticker);
+        persistPlayback();
+        playGeneration++;
+        if (mainHandler != null) {
+            mainHandler.removeCallbacks(ticker);
+            mainHandler.removeCallbacks(checkpoint);
+        }
         broadcastState(false);
         io.shutdownNow();
-        if (player != null) { player.stop(); player.release(); player = null; }
+        cacheMaintenance.shutdownNow();
+        if (prefetch != null) prefetch.shutdown();
+        releaseCandidate(preparingPlayer);
+        releasePlayer(player, playerSource);
+        player = null; playerSource = null;
         if (session != null) { session.release(); session = null; }
         try { unregisterReceiver(volumeReceiver); } catch (Exception ignored) {}
         try { unregisterReceiver(codecReceiver); } catch (Exception ignored) {}
+        try { unregisterReceiver(noisyReceiver); } catch (Exception ignored) {}
+        try { unregisterReceiver(policyReceiver); } catch (Exception ignored) {}
         if (audioManager != null) audioManager.abandonAudioFocus(focusListener);
         stopForeground(true); super.onDestroy();
     }
@@ -530,5 +876,20 @@ public final class NetworkStreamService extends Service {
             out.append(id);
         }
         return out.toString();
+    }
+
+    private static long[] decodeIds(String encoded) {
+        if (encoded == null || encoded.trim().isEmpty()) return new long[0];
+        String[] parts = encoded.split(",");
+        long[] values = new long[parts.length];
+        int count = 0;
+        for (String part : parts) try {
+            long value = Long.parseLong(part.trim());
+            if (value > 0) values[count++] = value;
+        } catch (NumberFormatException ignored) {}
+        if (count == values.length) return values;
+        long[] compact = new long[count];
+        System.arraycopy(values, 0, compact, 0, count);
+        return compact;
     }
 }

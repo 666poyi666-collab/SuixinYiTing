@@ -11,6 +11,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -89,7 +90,14 @@ public final class NetworkPlaybackBridge {
             activity.getApplication().registerActivityLifecycleCallbacks(
                     new Application.ActivityLifecycleCallbacks() {
                         @Override public void onActivityResumed(Activity current) {
-                            if (current == activityRef.get()) setUiActive(current, true);
+                            if (current == activityRef.get()) {
+                                hasPlayingState = false;
+                                playImageRef = new WeakReference<>(null);
+                                setUiActive(current, true);
+                                MAIN.postDelayed(new Runnable() {
+                                    @Override public void run() { apply(); }
+                                }, 250);
+                            }
                         }
                         @Override public void onActivityPaused(Activity current) {
                             if (current == activityRef.get()) setUiActive(current, false);
@@ -206,17 +214,31 @@ public final class NetworkPlaybackBridge {
         View play = find(activity, "play");
         if (play instanceof ImageView) {
             boolean playing = state.getBoolean("playing", false);
-            if (playImageRef.get() != play || !hasPlayingState || lastPlaying != playing) {
-                int drawable = activity.getResources().getIdentifier(
+            int drawable = activity.getResources().getIdentifier(
                         // The mother APK's legacy resources use these two names in reverse.
                         playing ? "ic_default_play" : "ic_default_pause",
                         "drawable", activity.getPackageName());
+            boolean drawableMismatch = drawable != 0
+                    && !sameDrawable((ImageView) play, activity, drawable);
+            if (playImageRef.get() != play || !hasPlayingState || lastPlaying != playing
+                    || drawableMismatch) {
                 if (drawable != 0) ((ImageView) play).setImageResource(drawable);
                 playImageRef = new WeakReference<>((ImageView) play);
                 lastPlaying = playing;
                 hasPlayingState = true;
             }
         }
+    }
+
+    private static boolean sameDrawable(ImageView view, Activity activity, int resource) {
+        Drawable current = view.getDrawable();
+        Drawable expected;
+        try { expected = activity.getResources().getDrawable(resource, activity.getTheme()); }
+        catch (Exception error) { return false; }
+        if (current == null || expected == null) return current == expected;
+        Drawable.ConstantState currentState = current.getConstantState();
+        Drawable.ConstantState expectedState = expected.getConstantState();
+        return currentState != null && expectedState != null && currentState.equals(expectedState);
     }
 
     private static void bindAction(final Activity activity, String idName, final String action) {

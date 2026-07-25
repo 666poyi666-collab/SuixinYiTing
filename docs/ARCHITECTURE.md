@@ -32,8 +32,10 @@ network-bridge (classes2.dex)
 | `NetworkTrack` / `LibraryGroup` | 稳定的业务数据对象 | Android View 或播放器状态 |
 | `ShuffleBag` | 完整可播放 ID 池、随机顺序、游标和上一首历史 | 依赖当前可见 UI 页决定随机范围 |
 | `QualityPolicy` / `StreamVariant` | 首选档位、实际档位、格式、码率、有效期和降档原因 | 猜测耳机最终 Codec |
-| `RangeCacheDataSource` | HTTP Range 流式读取、临时块缓存和流量日志 | 删除资料库和登录状态 |
-| `NetworkStreamService` | MediaPlayer、音频焦点、MediaSession、通知、seek、预取、播放状态广播 | 直接操作母版 Activity View |
+| `AudioCacheKey` / `AudioCacheStore` | 256KB 持久块索引、校验、pin、严格 LRU、统计和延迟清理 | 保存短期播放 URL、删除资料库或登录状态 |
+| `RangeCacheDataSource` | 从持久缓存读取、补齐缺失 Range，存储不足时校验后直连 | 自行维护另一份缓存索引 |
+| `AudioPrefetchManager` | 单线程、自适应批量预缓存及 generation 取消 | 与当前播放并发争抢下载带宽 |
+| `PlaybackPhase` / `NetworkStreamService` | 播放状态机、generation、MediaPlayer、音频焦点、MediaSession、通知、seek、恢复和状态广播 | 直接操作母版 Activity View |
 | `NetworkPlaybackBridge` | 把服务状态映射到母版标题、歌手、封面、歌词、进度和按钮 | 自己维护第二份播放队列 |
 | `NetworkMusicActivity` | 我喜欢、歌单、专辑、歌手和队列列表页面 | 直接解析音频或控制系统音量 |
 | `NetworkMenuRouter` / `NetworkEntry` | 原菜单语义到网络页面的稳定路由 | 按插入后的绝对位置偏移路由 |
@@ -69,15 +71,18 @@ network-bridge (classes2.dex)
   -> NetworkMusicActivity 发送 PLAY(track, playlist, full source_ids)
   -> ShuffleBag 加载完整可播放池并定位当前歌曲
   -> PlaylistStore 读取稳定元数据
-  -> NeteaseWebApi.resolve(首选音质)
+  -> 完整缓存命中时直接离线打开
+  -> 否则 NeteaseWebApi.resolve(首选音质)
   -> StreamVariant 返回实际档位和短期 URL
-  -> RangeCacheDataSource 按 Range 提供数据
+  -> AudioCacheStore / RangeCacheDataSource 按 256KB Range 提供数据
   -> MediaPlayer prepare/start
   -> MediaSession + notification + ACTION_STATE
   -> NetworkPlaybackBridge 更新母版播放页
 ```
 
-服务每秒发布歌曲、播放状态、位置、时长、完整歌词、当前歌词、封面、源音质和耳机 Codec。Activity 安装 bridge 后还会主动发送 `REQUEST_STATE`，用于恢复错过广播后的 UI。
+服务以 `PlaybackPhase` 和单调递增 generation 作为唯一播放状态。UI 活跃且正在播放时每秒只发布位置和当前歌词索引；完整歌词只在换歌、解析完成或 Activity 主动请求时发送。Activity 安装 bridge 后发送 `REQUEST_STATE`，用于恢复错过广播后的 UI。
+
+当前播放和预缓存共享下载门控：最多一个音频块在下载，当前播放等待者在预缓存下一块前优先取得下载权。每次点播、切歌或音质变化都会取消旧预取计划并递增播放 generation；解析、歌词和 `onPrepared` 提交前必须匹配当前 generation。
 
 ## 5. 随机队列
 
@@ -96,14 +101,14 @@ network-bridge (classes2.dex)
 用户首选 Hi-Res/无损/极高/较高/标准
   -> 网易云根据权益、版权和曲目返回实际源
   -> MediaPlayer 解码源音频
-  -> STREAM_MUSIC 系统音量 + 应用低端衰减曲线
+  -> STREAM_MUSIC 系统音量 + 线性应用增益
   -> Android A2DP 编码器
   -> 耳机实际 Codec
 ```
 
 - “源音质”与“耳机音质”是两个不同层次，必须同时显示。
 - 当前 OWW221 + Enco Free4：源可为无损 FLAC，但最终蓝牙为 AAC 165 kbps。
-- 系统 `STREAM_MUSIC` 是用户唯一音量；应用内部曲线只缓解低档过响，0 档严格静音，最大档 unity gain。
+- 系统 `STREAM_MUSIC` 是用户唯一音量；应用增益按 `当前档位 / 最大档位` 线性映射，0 档严格静音，最大档 unity gain，变化在 120ms 内平滑完成。
 
 ## 7. 存储边界
 
@@ -113,7 +118,8 @@ network-bridge (classes2.dex)
 | 歌单/歌曲/专辑/歌手 | SQLite `PlaylistStore` | 保留 | 默认保留，显式重置才删除 |
 | shuffle 状态 | `network_player` preferences | 保留 | 可按产品规则保留/重置 |
 | 首选音质 | `network_settings` preferences | 保留 | 保留 |
-| 音频 Range 块 | `cache/network_audio` | 删除 | 可删除 |
+| 音频块索引 | 私有 SQLite `audio_cache.db` | 只删除缓存表项 | 可删除 |
+| 音频 Range 块 | `cache/network_audio_v2/*.audio` | 删除；活动项延迟到释放后删除 | 可删除 |
 | 封面位图缓存 | 应用 cache/内存 | 删除 | 可删除 |
 | 构建签名 | 本机 keystore | 不进入 APK 数据 | 不进入仓库 |
 
@@ -125,6 +131,8 @@ network-bridge (classes2.dex)
 - 元数据：标题、歌手、媒体 ID。
 - 音量：`AudioManager.STREAM_MUSIC`。
 - 蓝牙：监听 A2DP Codec 配置变化并持久化最后确认值。
+- 外设断开：监听 `ACTION_AUDIO_BECOMING_NOISY`，立即暂停且重连不自动播放。
+- 服务恢复：每 15 秒及切歌、seek、暂停保存位置；仅在上次期望播放且当前存在耳机路由时自动续播。
 
 母版仍存在自己的空闲 MediaSession。网络播放时必须确保系统媒体按钮指向 `SuixinNetwork`，并避免两个活动会话同时宣称正在播放。
 

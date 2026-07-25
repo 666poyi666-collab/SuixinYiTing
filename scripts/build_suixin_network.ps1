@@ -36,6 +36,6 @@ if (-not $env:SUIXIN_KEY_PASS) { throw 'Set SUIXIN_KEY_PASS' }
 & "$bt\zipalign.exe" -f -p 4 $apk artifacts\build\suixinyiting-network-aligned.apk
 & "$bt\apksigner.bat" sign --ks $keystore `
   --ks-pass env:SUIXIN_KS_PASS --key-pass env:SUIXIN_KEY_PASS --ks-key-alias $keyAlias `
-  --out artifacts\build\suixinyiting-network-1.3.0.apk artifacts\build\suixinyiting-network-aligned.apk
-& "$bt\apksigner.bat" verify --verbose artifacts\build\suixinyiting-network-1.3.0.apk
-Get-FileHash artifacts\build\suixinyiting-network-1.3.0.apk -Algorithm SHA256
+  --out artifacts\build\suixinyiting-network-1.4.0.apk artifacts\build\suixinyiting-network-aligned.apk
+& "$bt\apksigner.bat" verify --verbose artifacts\build\suixinyiting-network-1.4.0.apk
+Get-FileHash artifacts\build\suixinyiting-network-1.4.0.apk -Algorithm SHA256

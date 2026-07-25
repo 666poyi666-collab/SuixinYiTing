@@ -2,7 +2,7 @@
 
 最后更新：2026-07-25
 
-当前应用基线：`1.3.0` / `versionCode 10300`
+当前应用基线：`1.4.0` / `versionCode 10400`
 
 目标设备：OPPO OWW221 / Android 11 / API 30 / 378x496
 
@@ -21,7 +21,7 @@
 
 - [开发日志](../DEVELOPMENT_LOG.md)：按时间追加的实际操作、结果与版本记录。
 - [Bug 修复索引](../BUGFIX_LOG.md)：版本与修复文档的快速索引。
-- [逐版本修复文档](bugfixes/)：`1.2.3` 至 `1.3.0` 的实现和验证证据。
+- [逐版本修复文档](bugfixes/)：`1.2.3` 至 `1.4.0` 的实现和验证证据。
 - [逆向与安装基线](../analysis/BASELINE_REPORT.md)：母版、网易云手表端与初始环境调查。
 - [设置审计](../analysis/SETTINGS_AUDIT_1.2.2.md)：母版设置对网络播放的适用情况。
 - [Wi-Fi 流量报告](../analysis/WIFI_TRAFFIC_REPORT_1.2.4.md)：无损流量与吞吐测试。

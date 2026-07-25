@@ -15,6 +15,7 @@
 | 1.2.8 | 378px 播放页音质信息完整展示 | `docs/bugfixes/1.2.8.md` | `artifacts/build/suixinyiting-network-1.2.8.apk` |
 | 1.2.9 | 音质面板布局重构和真机验收 | `docs/bugfixes/1.2.9.md` | `artifacts/build/suixinyiting-network-1.2.9.apk` |
 | 1.3.0 | 播放页/歌词页流畅度、内存与暂停功耗优化 | `docs/bugfixes/1.3.0.md` | `artifacts/build/suixinyiting-network-1.3.0.apk` |
+| 1.4.0 | 持久块缓存、自适应预取、播放状态与恢复治理 | `docs/bugfixes/1.4.0.md` | `artifacts/build/suixinyiting-network-1.4.0.apk` |
 
 跨版本问题、根因、状态和回归锚点统一维护在 `docs/BUG_CATALOG.md`。
 
@@ -36,3 +37,9 @@
 - Janky frames `57.30% → 38.19%`，P95 `150 → 32 ms`，missed vsync `43 → 1`。
 - 稳定 PSS `127,384 → 41,487 KB`，Graphics `20,280 → 6,100 KB`；暂停 10 秒无新增渲染帧，后台播放停止 UI ticker。
 - 歌词触摸滑动、三秒居中、封面、seek、资料库和 MediaSession 回归通过。
+
+## 1.4.0 验收摘要
+
+- `audio_cache.db` 保存 256KB 块位图；23,592,960 字节跨覆盖安装/服务重建复用。
+- 清理释放 227,926,494 字节，活动项 25,427,968 字节延迟释放；进程重建后从 `cached=0` 重新创建，1242/1242 资料库保持。
+- 后台返回按钮为两竖暂停图标；P95 27ms、missed vsync 0、PSS 45,399KB。
