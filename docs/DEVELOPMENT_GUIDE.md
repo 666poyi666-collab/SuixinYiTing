@@ -165,4 +165,3 @@ Get-FileHash artifacts\build\suixinyiting-network-<version>.apk -Algorithm SHA25
 - 能播放但系统不识别：核对 MediaSession active state、AudioFocus 和 playback state。
 - 播放无声：按“地址解析 → Range 数据 → prepared → STREAM_MUSIC → 输出路由”顺序定位。
 - 网络失败：分别验证账号接口、播放域名、系统公网连通性、Wi-Fi/蜂窝路由和计费状态。
-

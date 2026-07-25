@@ -1,7 +1,9 @@
 # 随心一听文档中心
 
-最后更新：2026-07-25  
-当前应用基线：`1.2.9` / `versionCode 10209`  
+最后更新：2026-07-25
+
+当前应用基线：`1.2.9` / `versionCode 10209`
+
 目标设备：OPPO OWW221 / Android 11 / API 30 / 378x496
 
 ## 必读顺序
@@ -45,4 +47,3 @@
 - 已发布制品：`artifacts/build/suixinyiting-network-<version>.apk` 与 GitHub Release。
 - 真机验证结果：对应版本 Bug 文档和 `DEVELOPMENT_LOG.md`。
 - 历史调查只提供证据，不自动代表当前实现状态。
-
