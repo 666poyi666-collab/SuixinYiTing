@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network player page, rebuilt for the OWW221 panel (378x496 px = 189x248 dp).
+
+    The master layout was authored for a phone: 50/58 dp transport buttons filled
+    the entire 189 dp width, the artist line had to carry the whole quality
+    string at 8 sp, and there was no elapsed/total readout at all. This version
+    keeps every id, tag and view type the generated DataBinding mapping needs and
+    only changes geometry and styling:
+
+      * one scrim so text stays legible over the cover;
+      * a dedicated quality line instead of overloading @id/artist;
+      * a time row above the seek bar;
+      * transport buttons sized for a 189 dp wide screen.
+
+    The constraint graph is a top-anchored block plus a bottom-anchored block
+    with the transport row floating between them, so it resolves in one pass.
+-->
+<androidx.constraintlayout.widget.ConstraintLayout android:tag="layout/fragment_activity_main_play_0" android:layout_width="match_parent" android:layout_height="match_parent" android:backgroundTint="@color/transparent"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <View android:id="@id/suixin_scrim" android:background="@drawable/bg_suixin_player_scrim" android:layout_width="0.0dip" android:layout_height="0.0dip" app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent" />
+
+    <LinearLayout android:orientation="vertical" android:id="@id/linearLayout2" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginTop="9.0dp" android:layout_marginStart="8.0dp" android:layout_marginEnd="8.0dp" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent">
+        <com.github.sky130.zero.music.widget.RollTextView android:textSize="16.0sp" android:textStyle="bold" android:textColor="@color/white" android:gravity="center" android:id="@id/title" android:tag="binding_1" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="marquee" android:marqueeRepeatLimit="marquee_forever" android:shadowColor="#a6000000" android:shadowDx="0.0" android:shadowDy="1.0" android:shadowRadius="3.0" />
+        <TextView android:textSize="11.0sp" android:textColor="#b3ffffff" android:gravity="center" android:id="@id/artist" android:tag="binding_2" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="1.0dp" android:singleLine="true" android:ellipsize="marquee" android:marqueeRepeatLimit="marquee_forever" android:shadowColor="#a6000000" android:shadowDx="0.0" android:shadowDy="1.0" android:shadowRadius="3.0" />
+    </LinearLayout>
+
+    <TextView android:textSize="8.5sp" android:textColor="#8cffffff" android:gravity="center" android:id="@id/suixin_quality" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginTop="2.0dp" android:layout_marginStart="6.0dp" android:layout_marginEnd="6.0dp" android:singleLine="true" android:ellipsize="end" android:includeFontPadding="false" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/linearLayout2" />
+
+    <TextView android:textSize="9.0sp" android:textColor="#a6ffffff" android:gravity="center" android:id="@id/suixin_status" android:visibility="gone" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginTop="3.0dp" android:layout_marginStart="6.0dp" android:layout_marginEnd="6.0dp" android:singleLine="true" android:ellipsize="end" android:includeFontPadding="false" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/suixin_quality" />
+
+    <LinearLayout android:gravity="center" android:id="@id/playLayout" android:layout_width="wrap_content" android:layout_height="wrap_content" app:layout_constraintBottom_toTopOf="@id/suixin_time_row" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/suixin_quality" app:layout_constraintVertical_bias="0.46">
+        <com.github.sky130.zero.widget.ZeroMusicButton android:id="@id/prev" android:src="@drawable/ic_default_prev" android:layout_width="36.0dp" android:layout_height="36.0dp" android:layout_marginEnd="12.0dp" />
+        <com.github.sky130.zero.widget.ZeroMusicButton android:layout_gravity="center" android:id="@id/play" android:src="@drawable/ic_default_pause" android:layout_width="52.0dp" android:layout_height="52.0dp" />
+        <com.github.sky130.zero.widget.ZeroMusicButton android:id="@id/next" android:src="@drawable/ic_default_next" android:layout_width="36.0dp" android:layout_height="36.0dp" android:layout_marginStart="12.0dp" />
+    </LinearLayout>
+
+    <LinearLayout android:orientation="horizontal" android:id="@id/suixin_time_row" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginStart="16.0dp" android:layout_marginEnd="16.0dp" android:layout_marginBottom="2.0dp" app:layout_constraintBottom_toTopOf="@id/progress" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent">
+        <!-- Fixed width AND height on purpose: TextView.checkForRelayout only
+             takes the invalidate-only path when neither dimension is
+             wrap_content. With wrap_content the once-a-second clock update
+             issued a requestLayout that walked up to the window root and
+             re-measured the full-height lyric TextView on the next page. -->
+        <TextView android:textSize="8.5sp" android:textColor="#99ffffff" android:gravity="start|center_vertical" android:id="@id/suixin_position" android:layout_width="40.0dp" android:layout_height="13.0dp" android:singleLine="true" android:includeFontPadding="false" android:text="0:00" />
+        <View android:layout_width="0.0dip" android:layout_height="1.0dip" android:layout_weight="1.0" />
+        <TextView android:textSize="8.5sp" android:textColor="#99ffffff" android:gravity="end|center_vertical" android:id="@id/suixin_duration" android:layout_width="40.0dp" android:layout_height="13.0dp" android:singleLine="true" android:includeFontPadding="false" android:text="0:00" />
+    </LinearLayout>
+
+    <com.github.sky130.zero.music.widget.ZeroPlaySeekBar android:id="@id/progress" android:tag="binding_3" android:focusable="true" android:focusableInTouchMode="true" android:visibility="visible" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginStart="14.0dp" android:layout_marginEnd="14.0dp" android:layout_marginBottom="6.0dp" android:maxHeight="9.0dp" android:minHeight="9.0dp" android:paddingStart="0.0dp" android:paddingEnd="0.0dp" app:layout_constraintBottom_toTopOf="@id/linearLayout3" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" />
+
+    <LinearLayout android:gravity="center" android:id="@id/linearLayout3" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginBottom="7.0dp" app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent">
+        <com.github.sky130.zero.widget.ZeroMusicButton android:id="@id/volume" android:src="@drawable/ic_default_volume" android:layout_width="30.0dp" android:layout_height="30.0dp" android:layout_marginEnd="18.0dp" />
+        <com.github.sky130.zero.widget.ZeroMusicButton android:id="@id/mode" android:tag="binding_4" android:src="@drawable/ic_default_mode_loop" android:layout_width="30.0dp" android:layout_height="30.0dp" />
+        <com.github.sky130.zero.widget.ZeroMusicButton android:id="@id/menu" android:tag="binding_5" android:src="@drawable/ic_default_menu" android:layout_width="30.0dp" android:layout_height="30.0dp" android:layout_marginStart="18.0dp" />
+    </LinearLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>

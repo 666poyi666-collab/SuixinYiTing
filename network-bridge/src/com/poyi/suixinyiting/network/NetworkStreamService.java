@@ -49,6 +49,10 @@ public final class NetworkStreamService extends Service {
             "com.poyi.suixinyiting.network.SET_UI_ACTIVE";
     public static final String ACTION_CLEAR_CACHE =
             "com.poyi.suixinyiting.network.CLEAR_CACHE";
+    /** Routes an in-app volume gesture to the system media stream. */
+    public static final String ACTION_ADJUST_VOLUME =
+            "com.poyi.suixinyiting.network.ADJUST_VOLUME";
+    public static final String ACTION_SET_VOLUME = "com.poyi.suixinyiting.network.SET_VOLUME";
     public static final String ACTION_PREFETCH_POLICY_CHANGED =
             "com.poyi.suixinyiting.network.PREFETCH_POLICY_CHANGED";
     private final ThreadPoolExecutor io = new ThreadPoolExecutor(2, 2, 30,
@@ -75,7 +79,10 @@ public final class NetworkStreamService extends Service {
             if (VOLUME_CHANGED_ACTION.equals(intent.getAction())
                     && intent.getIntExtra(EXTRA_VOLUME_STREAM_TYPE, -1)
                     == AudioManager.STREAM_MUSIC) {
-                applyOutputGain(true);
+                // Nothing to re-gain: the system stream is the only attenuator.
+                // Push the new index so the player UI stays in lockstep with it.
+                logSystemVolume("system change");
+                broadcastState(trackId > 0 || player != null);
             }
         }
     };
@@ -231,6 +238,12 @@ public final class NetworkStreamService extends Service {
             if (trackId > 0) beginPlay(trackId, desiredPlaying, currentPosition(), true);
         } else if (ACTION_SEEK.equals(action)) {
             seekTo(intent.getIntExtra("position", 0));
+        } else if (ACTION_ADJUST_VOLUME.equals(action)) {
+            adjustSystemVolume(intent.getIntExtra("direction", 0),
+                    intent.getBooleanExtra("showUi", false));
+        } else if (ACTION_SET_VOLUME.equals(action)) {
+            setSystemVolume(intent.getIntExtra("index", systemVolume()),
+                    intent.getBooleanExtra("showUi", false));
         } else if (ACTION_REQUEST_STATE.equals(action)) {
             // Activities may be recreated after the most recent state broadcast.
             // Reply with the live player state instead of leaving the mother UI stale.
@@ -637,6 +650,9 @@ public final class NetworkStreamService extends Service {
         state.putExtra("format", variant == null ? "" : variant.format);
         state.putExtra("qualityReason", variant == null ? "" : variant.fallbackReason);
         state.putExtra("outputCodec", outputCodec);
+        // The UI never keeps a private volume; it mirrors STREAM_MUSIC verbatim.
+        state.putExtra("volume", systemVolume());
+        state.putExtra("volumeMax", systemVolumeMax());
         state.putExtra("phase", phase.name());
         state.putExtra("generation", playGeneration);
         state.putExtra("offlineCached", offlineCached);
@@ -735,14 +751,6 @@ public final class NetworkStreamService extends Service {
                 focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
     }
 
-    private float targetOutputGain() {
-        if (audioManager == null) return 1f;
-        int volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-        int max = Math.max(1, audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-        if (volume <= 0) return 0f;
-        return volume / (float) max;
-    }
-
     private static String codecLabel(BluetoothCodecConfig config) {
         String codec;
         int bitrate = 0;
@@ -803,17 +811,24 @@ public final class NetworkStreamService extends Service {
         return 0;
     }
 
+    /**
+     * The system media stream is the single volume control (AUDIO-004).
+     *
+     * <p>AudioPolicy already applies the STREAM_MUSIC curve for this device
+     * category — on OWW221 that is {@code (1,-58dB) (20,-40dB) (60,-17dB)
+     * (100,-2dB)} for headsets. Multiplying the player by another linear
+     * {@code index/max} factor stacked a second attenuation on top of it, so
+     * 3/16 over A2DP landed near -55 dB instead of -41 dB. The player therefore
+     * always runs at unity and only fades to avoid start/resume pops.
+     */
     private void applyOutputGain(boolean animate) {
         final MediaPlayer active = player;
         if (active == null) return;
-        final float target = targetOutputGain();
         final int generation = ++gainGeneration;
-        if (!animate || mainHandler == null) {
-            currentOutputGain = target;
-            active.setVolume(target, target);
-            Log.i("SuixinNetease", "output gain=" + target + " system="
-                    + audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) + "/"
-                    + audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+        if (!animate || mainHandler == null || currentOutputGain >= 1f) {
+            currentOutputGain = 1f;
+            try { active.setVolume(1f, 1f); } catch (Exception ignored) {}
+            logSystemVolume("unity");
             return;
         }
         final float start = currentOutputGain;
@@ -822,15 +837,59 @@ public final class NetworkStreamService extends Service {
             mainHandler.postDelayed(new Runnable() {
                 @Override public void run() {
                     if (generation != gainGeneration || player != active) return;
-                    float value = start + (target - start) * currentStep / 6f;
+                    float value = start + (1f - start) * currentStep / 6f;
                     currentOutputGain = value;
-                    active.setVolume(value, value);
-                    if (currentStep == 6) Log.i("SuixinNetease", "output gain=" + value
-                            + " system=" + audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                            + "/" + audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+                    try { active.setVolume(value, value); } catch (Exception ignored) {}
+                    if (currentStep == 6) logSystemVolume("fade-in");
                 }
             }, currentStep * 20L);
         }
+    }
+
+    private void logSystemVolume(String reason) {
+        if (audioManager == null) return;
+        Log.i("SuixinNetease", "output gain=" + currentOutputGain + " (" + reason
+                + ") system=" + audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                + "/" + audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+    }
+
+    /** Current system media volume, reported to the UI so it can mirror it exactly. */
+    private int systemVolume() {
+        return audioManager == null ? 0 : audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+    }
+
+    private int systemVolumeMax() {
+        return audioManager == null ? 1
+                : Math.max(1, audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+    }
+
+    /**
+     * Applies a user volume request to the system media stream. Every in-app
+     * control routes through here so the app never keeps a private volume.
+     */
+    private void adjustSystemVolume(int direction, boolean showUi) {
+        if (audioManager == null) return;
+        int flags = showUi ? AudioManager.FLAG_SHOW_UI : 0;
+        try {
+            audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, flags);
+        } catch (SecurityException error) {
+            Log.w("SuixinNetease", "volume adjust rejected: " + error.getMessage());
+        }
+        logSystemVolume("adjust " + direction);
+        broadcastState(true);
+    }
+
+    private void setSystemVolume(int index, boolean showUi) {
+        if (audioManager == null) return;
+        int target = Math.max(0, Math.min(index, systemVolumeMax()));
+        try {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target,
+                    showUi ? AudioManager.FLAG_SHOW_UI : 0);
+        } catch (SecurityException error) {
+            Log.w("SuixinNetease", "volume set rejected: " + error.getMessage());
+        }
+        logSystemVolume("set " + target);
+        broadcastState(true);
     }
 
     private Notification notification(String title, String subtitle) {

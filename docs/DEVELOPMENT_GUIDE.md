@@ -97,6 +97,42 @@ adb -s $device shell dumpsys package com.poyi.suixinyiting |
 
 覆盖安装只用 `install -r`。测试登录/资料库保留时禁止 `pm clear` 和卸载重装。
 
+### 6.1 网络 ADB 常驻
+
+手表是 production `user` 构建，无法把网络调试写进设备本身：
+
+- `adb shell setprop persist.adb.tcp.port 5555` → `Failed to set property`。
+- `adb shell settings put global adb_wifi_enabled 1` → 框架立即回滚为 `0`，
+  Android 11 无线调试不可用。
+
+因此 `adb tcpip 5555` 只在本次开机内有效，常驻由 PC 侧保活：
+
+```powershell
+# 前台运行（当前会话保活）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\watch_adb_keepalive.ps1
+
+# 单次对账，用于排查
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\watch_adb_keepalive.ps1 -Once
+
+# 注册为登录自启的计划任务（长期常驻，需本人执行一次）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_watch_adb_task.ps1
+
+# 卸载计划任务
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_watch_adb_task.ps1 -Remove
+```
+
+保活逻辑：
+
+1. 端点健康时只做 `shell echo ok` 探活，不做多余操作。
+2. 断线时先用缓存端点 `adb connect` 重连。
+3. 重连失败且 USB 在位时，重新 `adb tcpip 5555`，回读 `wlan0` 地址并重连
+   （手表重启后就靠这一步恢复）。
+4. DHCP 换租约时按同网段 ARP 表逐个尝试，命中后更新缓存端点。
+
+状态与日志：`artifacts/adb/watch-endpoint.json`、
+`artifacts/adb/watch_adb_keepalive.log`。
+
+
 ## 7. 调试命令
 
 播放与崩溃：

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import struct
 import sys
 from pathlib import Path
@@ -8,6 +9,36 @@ from pathlib import Path
 
 OLD_PACKAGE = "ml.sky233.zero.music"
 NEW_PACKAGE = "com.poyi.suixinyiting"
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RES_OVERLAY = REPO_ROOT / "res-overlay"
+
+# Ids introduced by the watch UI. They are not in the master's public.xml, so
+# aapt2 allocates fresh ids for them and every existing id keeps its value.
+WATCH_IDS = (
+    "suixin_scrim",
+    "suixin_quality",
+    "suixin_time_row",
+    "suixin_position",
+    "suixin_duration",
+    "suixin_network_cover",
+    "suixin_lyric_scroll",
+    "suixin_lyric_scrim",
+    "suixin_status",
+)
+
+# The master's cover backdrop, declared in XML so the bridge only has to set a
+# bitmap instead of adding a view to @id/main on every activity instance.
+COVER_VIEW = (
+    '    <!-- Network cover backdrop, bound by NetworkPlaybackBridge. -->\n'
+    '    <ImageView android:id="@id/suixin_network_cover" android:visibility="gone"'
+    ' android:layout_width="match_parent" android:layout_height="match_parent"'
+    ' android:scaleType="centerCrop" />\n'
+)
+BLACK_BACKGROUND = (
+    '    <View android:id="@id/black_background" android:background="@color/black"'
+    ' android:layout_width="match_parent" android:layout_height="match_parent" />'
+)
 
 
 def replace_text(path: Path, pairs: list[tuple[str, str]]) -> int:
@@ -121,8 +152,8 @@ def patch_brand(root: Path) -> int:
 def patch_version(root: Path) -> None:
     yml = root / "apktool.yml"
     text = yml.read_text(encoding="utf-8")
-    text = re.sub(r"(?m)^  versionCode: .*?$", "  versionCode: 10400", text)
-    text = re.sub(r"(?m)^  versionName: .*?$", "  versionName: 1.4.0", text)
+    text = re.sub(r"(?m)^  versionCode: .*?$", "  versionCode: 10500", text)
+    text = re.sub(r"(?m)^  versionName: .*?$", "  versionName: 1.5.0", text)
     yml.write_text(text, encoding="utf-8", newline="\n")
 
 
@@ -547,6 +578,81 @@ def patch_keep_screen_on(root: Path) -> str:
     return str(main)
 
 
+def patch_watch_ui(root: Path) -> list[str]:
+    """Apply the 378x496 watch UI over the master's phone-sized resources.
+
+    Everything here is idempotent so the tree can be re-patched, and it is kept
+    out of the apktool working tree so a clean decode plus this script always
+    reproduces the shipped layout set.
+    """
+    touched: list[str] = []
+    res = root / "res"
+
+    for source in sorted(RES_OVERLAY.rglob("*.xml")):
+        target = res / source.relative_to(RES_OVERLAY)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = source.read_text(encoding="utf-8")
+        if not target.exists() or target.read_text(encoding="utf-8") != payload:
+            target.write_text(payload, encoding="utf-8", newline="\n")
+        touched.append(str(target))
+
+    ids = res / "values" / "ids.xml"
+    text = ids.read_text(encoding="utf-8")
+    missing = "".join(
+        f'    <id name="{name}" />\n'
+        for name in WATCH_IDS
+        if f'<id name="{name}" />' not in text
+    )
+    if missing:
+        ids.write_text(
+            text.replace("</resources>", missing + "</resources>"),
+            encoding="utf-8",
+            newline="\n",
+        )
+    touched.append(str(ids))
+
+    # Menu rows were authored at 19 sp next to a 45 dp icon, which clipped
+    # "我喜欢的音乐" on a 189 dp wide panel.
+    styles = res / "values" / "styles.xml"
+    text = styles.read_text(encoding="utf-8")
+    text = re.sub(
+        r'(<style name="ItemMenuImage">(?:(?!</style>).)*?<item name="android:maxHeight">)'
+        r"[\d.]+dp(</item>)",
+        r"\g<1>34.0dp\g<2>",
+        text,
+        flags=re.S,
+    )
+    text = re.sub(
+        r'(<style name="ItemMenuTitle" parent="@style/BaseTextView">\s*'
+        r'<item name="android:textSize">)[\d.]+sp(</item>)',
+        r"\g<1>15.0sp\g<2>",
+        text,
+    )
+    styles.write_text(text, encoding="utf-8", newline="\n")
+    touched.append(str(styles))
+
+    for variant in ("layout", "layout-round"):
+        main = res / variant / "activity_main.xml"
+        if not main.exists():
+            continue
+        text = main.read_text(encoding="utf-8")
+        if 'android:id="@id/suixin_network_cover"' not in text:
+            if BLACK_BACKGROUND not in text:
+                raise RuntimeError(f"{main}: black_background anchor not found")
+            text = text.replace(BLACK_BACKGROUND, COVER_VIEW + BLACK_BACKGROUND, 1)
+        # The master's volume overlay was a full-bleed bar that covered the whole
+        # player; make it a slim column on the trailing edge next to the crown.
+        text = re.sub(
+            r'(<com\.github\.sky130\.zero\.music\.widget\.ZeroVerticalProgressBar[^>]*?'
+            r'android:layout_width=")match_parent(")',
+            r"\g<1>22.0dp\g<2>",
+            text,
+        )
+        main.write_text(text, encoding="utf-8", newline="\n")
+        touched.append(str(main))
+    return touched
+
+
 def write_icon(root: Path) -> None:
     icon = root / "res" / "drawable" / "ic_suixin_launcher.xml"
     icon.write_text(
@@ -577,6 +683,7 @@ def main() -> None:
     native_bridges = patch_native_license_bridges(root)
     network_bridge = patch_network_bridge(root)
     keep_screen_on = patch_keep_screen_on(root)
+    watch_ui = patch_watch_ui(root)
     print(f"brand files changed: {changed}")
     print("unlock files:")
     for path in unlock:
@@ -592,6 +699,9 @@ def main() -> None:
     for path in network_bridge:
         print(path)
     print(f"keep-screen-on patch: {keep_screen_on}")
+    print("watch UI resources:")
+    for path in watch_ui:
+        print(path)
 
 
 if __name__ == "__main__":

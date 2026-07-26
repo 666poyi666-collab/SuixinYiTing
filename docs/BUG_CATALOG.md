@@ -33,6 +33,13 @@
 | BUG-027 | S1 | 同曲重播/服务重启后缓存块重复下载，缓存上限不严格 | 块位图只在内存、键只有 trackId，淘汰仅在创建数据源时执行 | 已修复 1.4.0 | 23,592,960 字节跨服务重建复用；清理待释放标记跨进程生效 |
 | BUG-028 | S1 | 快速切歌可能由旧 onPrepared 抢播并覆盖新状态 | 异步解析、歌词、prepare 和重试没有统一 generation | 已修复 1.4.0 | 所有异步提交校验 generation；失效播放器、数据源和预取计划释放/取消 |
 | BUG-029 | S1 | 耳机断开后可能切到手表扬声器继续播放 | 未处理 ACTION_AUDIO_BECOMING_NOISY | 观察中 1.4.0 | 接收器与同步暂停已实现；受保护广播不能由 ADB 模拟，真实蓝牙/有线断连待复测 |
+| BUG-030 | S1 | 系统媒体音量档位与实际响度不符，低档几乎无声 | 播放器按 `index/max` 再乘一次线性增益，与 AudioPolicy 的 STREAM_MUSIC 曲线叠加成二次衰减 | 已修复 1.5.0 | 播放器恒定 unity，仅保留防爆音渐入；系统媒体流为唯一衰减来源 |
+| BUG-031 | S2 | 音量键不改变媒体音量 | Activity 未调用 `setVolumeControlStream()` | 已修复 1.5.0 | MainActivity 与 NetworkMusicActivity 均设为 STREAM_MUSIC |
+| BUG-032 | S2 | 播放中每秒一次全窗口重新布局 | 已播/总时长 TextView 为 `wrap_content`，`checkForRelayout()` 走 requestLayout 分支并连带重测歌词块 | 已修复 1.5.0 | 时间文本固定 40dp x 13dp；稳态 Slow UI thread 11/20 → 1/20 |
+| BUG-033 | S2 | 歌词换行时整块重排 | 高亮使用 StyleSpan 与 RelativeSizeSpan，均为 MetricAffectingSpan | 已修复 1.5.0 | 整首只 setText 一次，之后仅移动 ForegroundColorSpan |
+| BUG-034 | S2 | 1242 行资料库滚动掉帧 | `getView()` 忽略 convertView，每格重建视图树；封面按原图解码 | 已修复 1.5.0 | ViewHolder 复用 + 120px 服务端缩略图；滚动 8.39% → 3.92% janky |
+| BUG-035 | S3 | 播放页六个按钮完全贴合无间距 | 同时声明 `layout_margin` 与单边 margin，MarginLayoutParams 忽略单边值 | 已修复 1.5.0 | 删除 `layout_margin`，只保留单边 margin |
+| BUG-036 | S3 | 菜单“我喜欢的音乐”被截断 | ItemMenuTitle 19sp 配 45dp 图标超出 189dp 面板 | 已修复 1.5.0 | 图标 34dp、标题 15sp，单屏可见项 3 → 4 |
 
 ## Bug 处理规则
 

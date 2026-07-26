@@ -56,6 +56,9 @@ public final class NetworkMusicActivity extends Activity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        // Crown and hardware volume keys stay on the media stream on every
+        // network page, not just the player (AUDIO-004).
+        setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
         launchMode = getIntent().getStringExtra("mode");
         if (launchMode == null) launchMode = "playlists";
         api = new NeteaseWebApi(this); store = new PlaylistStore(this);
@@ -66,15 +69,29 @@ public final class NetworkMusicActivity extends Activity {
         }});
     }
 
+    /** Density-independent pixels; the panel is 378x496 px at 2.0 density. */
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    /** One reusable row; without this every scroll step inflated a new tree. */
+    private static final class RowHolder {
+        LinearLayout box;
+        ImageView cover;
+        TextView primary;
+        TextView secondary;
+    }
+
     private void buildUi() {
         getWindow().setStatusBarColor(Color.BLACK);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(16, 10, 16, 8); root.setBackgroundColor(Color.BLACK);
+        root.setPadding(dp(7), dp(5), dp(7), dp(3)); root.setBackgroundColor(Color.BLACK);
         String pageTitle = "albums".equals(launchMode) ? "专辑"
                 : "artists".equals(launchMode) ? "歌手"
                 : "queue".equals(launchMode) ? "播放队列"
                 : "liked".equals(launchMode) ? "我喜欢的音乐" : "歌单";
-        TextView title = text(pageTitle, 25, Color.WHITE);
+        TextView title = text(pageTitle, 17, Color.WHITE);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         title.setOnLongClickListener(new View.OnLongClickListener() {
             @Override public boolean onLongClick(View v) {
                 new android.app.AlertDialog.Builder(NetworkMusicActivity.this)
@@ -90,34 +107,72 @@ public final class NetworkMusicActivity extends Activity {
                 return true;
             }
         });
-        title.setGravity(Gravity.CENTER_VERTICAL); root.addView(title, new LinearLayout.LayoutParams(-1, 56));
-        status = text("正在读取登录状态…", 15, 0xffaaaaaa);
-        root.addView(status, new LinearLayout.LayoutParams(-1, 44));
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        title.setSingleLine(true);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        root.addView(title, new LinearLayout.LayoutParams(-1, dp(24)));
+        status = text("正在读取登录状态…", 9.5f, 0xffaaaaaa);
+        status.setSingleLine(true);
+        status.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        root.addView(status, new LinearLayout.LayoutParams(-1, dp(14)));
         list = new ListView(this); list.setDividerHeight(1); list.setBackgroundColor(Color.BLACK);
+        list.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        list.setScrollingCacheEnabled(false);
         adapter = new ArrayAdapter<Object>(this, android.R.layout.simple_list_item_2,
                 android.R.id.text1, rows) {
             @Override public View getView(int pos, View convert, ViewGroup parent) {
-                LinearLayout box = new LinearLayout(NetworkMusicActivity.this);
-                box.setOrientation(LinearLayout.HORIZONTAL); box.setGravity(Gravity.CENTER_VERTICAL);
-                box.setPadding(16, 14, 8, 14);
-                Object row = getItem(pos);
-                if (row instanceof LibraryGroup && !((LibraryGroup) row).coverUrl.isEmpty()) {
-                    ImageView cover = new ImageView(NetworkMusicActivity.this);
-                    cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                    LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(58, 58);
-                    cp.rightMargin = 12; box.addView(cover, cp);
-                    loadCover(cover, ((LibraryGroup) row).coverUrl);
+                // Recycling matters more here than anywhere else in the app: the
+                // liked list is 1242 rows. The previous revision ignored
+                // convertView and built a fresh LinearLayout, two TextViews and
+                // sometimes an ImageView for every single scroll step.
+                RowHolder holder;
+                if (convert instanceof LinearLayout && convert.getTag() instanceof RowHolder) {
+                    holder = (RowHolder) convert.getTag();
+                } else {
+                    holder = new RowHolder();
+                    holder.box = new LinearLayout(NetworkMusicActivity.this);
+                    holder.box.setOrientation(LinearLayout.HORIZONTAL);
+                    holder.box.setGravity(Gravity.CENTER_VERTICAL);
+                    holder.box.setPadding(dp(5), dp(6), dp(4), dp(6));
+                    holder.cover = new ImageView(NetworkMusicActivity.this);
+                    holder.cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                    LinearLayout.LayoutParams cp =
+                            new LinearLayout.LayoutParams(dp(29), dp(29));
+                    cp.rightMargin = dp(6);
+                    holder.box.addView(holder.cover, cp);
+                    LinearLayout labels = new LinearLayout(NetworkMusicActivity.this);
+                    labels.setOrientation(LinearLayout.VERTICAL);
+                    holder.box.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+                    holder.primary = text("", 13, Color.WHITE);
+                    holder.primary.setSingleLine(true);
+                    holder.primary.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    labels.addView(holder.primary);
+                    holder.secondary = text("", 9.5f, 0xff9aa0a6);
+                    holder.secondary.setSingleLine(true);
+                    holder.secondary.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    labels.addView(holder.secondary);
+                    holder.box.setTag(holder);
+                    convert = holder.box;
                 }
-                LinearLayout labels = new LinearLayout(NetworkMusicActivity.this);
-                labels.setOrientation(LinearLayout.VERTICAL);
-                box.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+
+                Object row = getItem(pos);
+                String coverUrl = row instanceof LibraryGroup
+                        ? ((LibraryGroup) row).coverUrl : "";
+                if (coverUrl.isEmpty()) {
+                    holder.cover.setVisibility(View.GONE);
+                    holder.cover.setTag(null);
+                } else {
+                    holder.cover.setVisibility(View.VISIBLE);
+                    loadCover(holder.cover, coverUrl);
+                }
+
                 String primary = row instanceof NetworkTrack ? ((NetworkTrack) row).title
                         : row instanceof LibraryGroup ? ((LibraryGroup) row).name
                         : ((NetworkMusicSource.Playlist) row).name;
                 if (row instanceof NetworkTrack && ((NetworkTrack) row).id == queueCurrentId)
                     primary = "▶ " + primary;
-                TextView a = text(primary, 18, Color.WHITE);
-                labels.addView(a);
+                holder.primary.setText(primary);
+
                 String sub;
                 if (row instanceof NetworkTrack) {
                     NetworkTrack track = (NetworkTrack) row;
@@ -130,8 +185,8 @@ public final class NetworkMusicActivity extends Activity {
                 } else {
                     sub = ((NetworkMusicSource.Playlist) row).trackCount + " 首";
                 }
-                TextView b = text(sub, 14, 0xff999999); labels.addView(b);
-                return box;
+                holder.secondary.setText(sub);
+                return convert;
             }
         };
         list.setAdapter(adapter); root.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -158,6 +213,16 @@ public final class NetworkMusicActivity extends Activity {
         return t;
     }
 
+    /**
+     * Netease image hosts resize server-side via {@code ?param=WxH}. Asking for
+     * a 120 px thumbnail instead of the 300-500 px original cuts both the list's
+     * download volume and its decode cost.
+     */
+    private static String thumbnailUrl(String url) {
+        if (url.contains("param=") || !url.contains("music.126.net")) return url;
+        return url + (url.indexOf('?') >= 0 ? "&" : "?") + "param=120y120";
+    }
+
     private void loadCover(final ImageView view, final String url) {
         view.setTag(url);
         Bitmap cached = COVERS.get(url);
@@ -165,9 +230,15 @@ public final class NetworkMusicActivity extends Activity {
         COVER_IO.execute(new Runnable() { @Override public void run() {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(url).openConnection();
+                connection = (HttpURLConnection) new URL(thumbnailUrl(url)).openConnection();
                 connection.setConnectTimeout(6000); connection.setReadTimeout(6000);
-                final Bitmap image = BitmapFactory.decodeStream(connection.getInputStream());
+                // Thumbnails render at 29 dp (58 px). Decoding the originals at
+                // full size filled the cache with far more pixels than the list
+                // can ever show.
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inPreferredConfig = Bitmap.Config.RGB_565;
+                final Bitmap image = BitmapFactory.decodeStream(
+                        connection.getInputStream(), null, options);
                 if (image == null) return; COVERS.put(url, image);
                 main.post(new Runnable() { @Override public void run() {
                     if (url.equals(view.getTag())) view.setImageBitmap(image);

@@ -16,6 +16,7 @@
 | 1.2.9 | 音质面板布局重构和真机验收 | `docs/bugfixes/1.2.9.md` | `artifacts/build/suixinyiting-network-1.2.9.apk` |
 | 1.3.0 | 播放页/歌词页流畅度、内存与暂停功耗优化 | `docs/bugfixes/1.3.0.md` | `artifacts/build/suixinyiting-network-1.3.0.apk` |
 | 1.4.0 | 持久块缓存、自适应预取、播放状态与恢复治理 | `docs/bugfixes/1.4.0.md` | `artifacts/build/suixinyiting-network-1.4.0.apk` |
+| 1.5.0 | 手表 UI 重构、系统媒体音量归一与渲染开销治理 | `docs/bugfixes/1.5.0.md` | `artifacts/build/suixinyiting-network-1.5.0.apk` |
 
 跨版本问题、根因、状态和回归锚点统一维护在 `docs/BUG_CATALOG.md`。
 
@@ -43,3 +44,15 @@
 - `audio_cache.db` 保存 256KB 块位图；23,592,960 字节跨覆盖安装/服务重建复用。
 - 清理释放 227,926,494 字节，活动项 25,427,968 字节延迟释放；进程重建后从 `cached=0` 重新创建，1242/1242 资料库保持。
 - 后台返回按钮为两竖暂停图标；P95 27ms、missed vsync 0、PSS 45,399KB。
+
+## 1.5.0 验收摘要
+
+- 移除播放器二次线性增益，系统 `STREAM_MUSIC` 成为唯一衰减来源；应用内滑条
+  实测把系统档位由 `5/16` 调到 `9/16`，日志恒为 `output gain=1.0 (unity)`。
+- 播放页、歌词页、音量面板、菜单和资料库按 378x496 重构，菜单与资料库单屏
+  可见项分别由 3 增至 4 和 5，音质信息独立成行不再被压到 8sp。
+- 每秒时钟不再触发全窗口重新布局：稳态 `Slow UI thread 11/20 → 1/20`、
+  P95 `44 → 34 ms`；资料库滚动 `8.39% → 3.92%` janky、P95 `17 → 13 ms`。
+- 歌词高亮改为移动非度量 Span，换行不再重排整首歌词。
+- 手表网络 ADB 由 `scripts/watch_adb_keepalive.ps1` 保活，断线自动重连，
+  插上 USB 时自动重新 `adb tcpip`。

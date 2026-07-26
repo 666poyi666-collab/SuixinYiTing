@@ -4,9 +4,14 @@ $module = Join-Path $root 'network-bridge'
 $build = Join-Path $module 'build'
 $classes = Join-Path $build 'classes'
 $deps = Join-Path $module 'deps'
+# Machine-specific SDK path and signing credentials live in a git-ignored file
+# so nothing environment-specific is ever committed.
+$localEnv = Join-Path $PSScriptRoot 'local-build-env.ps1'
+if (Test-Path $localEnv) { . $localEnv }
+
 $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) {
     $env:ANDROID_SDK_ROOT
-} else { throw 'Set ANDROID_HOME or ANDROID_SDK_ROOT' }
+} else { throw 'Set ANDROID_HOME or ANDROID_SDK_ROOT (see scripts/local-build-env.example.ps1)' }
 $androidJar = Join-Path $sdk 'platforms\android-35\android.jar'
 $d8 = Join-Path $sdk 'build-tools\35.0.0\d8.bat'
 

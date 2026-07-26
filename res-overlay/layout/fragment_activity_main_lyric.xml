@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Full lyric page.
+
+    Previously the bridge detached @id/tip at runtime and re-parented it into a
+    programmatically created ScrollView on every activity instance, which cost a
+    full hierarchy rebuild on each resume. The scroller is now part of the
+    layout, so binding is a plain findViewById and the page never re-parents.
+
+    @id/tip keeps its id and type; @id/lyric_view and @id/lyric_view2 stay for
+    the master local-playback path, which still drives them directly.
+-->
+<FrameLayout android:orientation="vertical" android:tag="layout/fragment_activity_main_lyric_0" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <View android:id="@id/suixin_lyric_scrim" android:background="@drawable/bg_suixin_lyric_scrim" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+    <com.github.sky130.zero.music.widget.lyric.LyricView android:id="@id/lyric_view" android:layout_width="match_parent" android:layout_height="match_parent" />
+    <com.github.sky130.zero.music.widget.lyric.LyricView2 android:id="@id/lyric_view2" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+    <ScrollView android:id="@id/suixin_lyric_scroll" android:visibility="gone" android:focusable="true" android:focusableInTouchMode="true" android:layout_width="match_parent" android:layout_height="match_parent" android:scrollbars="none" android:overScrollMode="never" android:fillViewport="false" android:requiresFadingEdge="none">
+        <TextView android:textSize="13.0sp" android:textColor="#99ffffff" android:gravity="center_horizontal" android:id="@id/tip" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingLeft="9.0dp" android:paddingTop="100.0dp" android:paddingRight="9.0dp" android:paddingBottom="100.0dp" android:lineSpacingExtra="8.0dp" android:breakStrategy="simple" android:hyphenationFrequency="none" android:shadowColor="#b3000000" android:shadowDx="0.0" android:shadowDy="1.0" android:shadowRadius="3.0" android:text="@string/current_not_lyric" />
+    </ScrollView>
+</FrameLayout>

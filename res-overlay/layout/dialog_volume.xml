@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    System media volume sheet.
+
+    The master sized the slider at 50 dp tall and full width, which on a 189 dp
+    panel became a pill covering the whole player. It is now a 26 dp track with
+    real side margins, plus a label making it explicit that this is the system
+    media stream and not a second app-level volume (AUDIO-004).
+
+    @id/progress keeps its id, type and binding_1 tag; the close button keeps
+    binding_2, so the generated binding mapping is unchanged.
+-->
+<FrameLayout android:tag="layout/dialog_volume_0" android:background="@color/dialog_background" style="@style/WearFrameLayout"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <LinearLayout android:orientation="vertical" android:layout_gravity="center" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginLeft="18.0dp" android:layout_marginRight="18.0dp">
+        <TextView android:textSize="10.0sp" android:textColor="#a6ffffff" android:gravity="center" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="10.0dp" android:includeFontPadding="false" android:text="系统媒体音量" />
+        <com.github.sky130.zero.music.widget.ZeroPlaySeekBar android:id="@id/progress" android:tag="binding_1" android:paddingLeft="0.0dp" android:paddingRight="0.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxHeight="26.0dp" android:minHeight="26.0dp" android:paddingStart="0.0dp" android:paddingEnd="0.0dp" />
+        <TextView android:textSize="9.0sp" android:textColor="#8cffffff" android:gravity="center" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="9.0dp" android:includeFontPadding="false" android:text="表冠与音量键同步调节" />
+    </LinearLayout>
+    <com.github.sky130.zero.widget.ZeroMusicButton android:layout_gravity="center|bottom" android:tag="binding_2" android:layout_width="34.0dp" android:layout_height="34.0dp" android:layout_margin="9.0dp" android:src="@drawable/ic_close" />
+</FrameLayout>

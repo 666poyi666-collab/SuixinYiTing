@@ -101,14 +101,21 @@ network-bridge (classes2.dex)
 用户首选 Hi-Res/无损/极高/较高/标准
   -> 网易云根据权益、版权和曲目返回实际源
   -> MediaPlayer 解码源音频
-  -> STREAM_MUSIC 系统音量 + 线性应用增益
+  -> STREAM_MUSIC 系统音量（唯一衰减层，应用恒定 unity）
   -> Android A2DP 编码器
   -> 耳机实际 Codec
 ```
 
 - “源音质”与“耳机音质”是两个不同层次，必须同时显示。
 - 当前 OWW221 + Enco Free4：源可为无损 FLAC，但最终蓝牙为 AAC 165 kbps。
-- 系统 `STREAM_MUSIC` 是用户唯一音量；应用增益按 `当前档位 / 最大档位` 线性映射，0 档严格静音，最大档 unity gain，变化在 120ms 内平滑完成。
+- 系统 `STREAM_MUSIC` 是用户唯一音量。播放器恒定 unity gain，只在启动/恢复时做
+  120ms 防爆音渐入；不再按 `当前档位 / 最大档位` 叠加线性增益。
+- 衰减完全交给设备 AudioPolicy 的音量曲线。OWW221 实测
+  `DEVICE_CATEGORY_HEADSET` 为 `(1,-58dB) (20,-40dB) (60,-17dB) (100,-2dB)`，
+  本身已是对数曲线；再乘一次线性增益会让 A2DP 3/16 档从 -41 dB 掉到约 -55 dB。
+- 所有应用内音量入口（音量面板、`ACTION_ADJUST_VOLUME`、`ACTION_SET_VOLUME`）
+  都写系统媒体流；Activity 设置 `setVolumeControlStream(STREAM_MUSIC)`，
+  状态广播回传 `volume` / `volumeMax` 供界面镜像。
 
 ## 7. 存储边界
 
@@ -139,9 +146,13 @@ network-bridge (classes2.dex)
 ## 9. 构建架构
 
 1. `build_network_bridge.ps1` 下载编译依赖、javac 编译并用 D8 生成 `classes2.dex`。
-2. `patch_suixin.py` 对解包母版应用品牌、版本、权限和 hook 补丁。
+2. `patch_suixin.py` 对解包母版应用品牌、版本、权限、hook 补丁，并由
+   `patch_watch_ui()` 把 `res-overlay/` 的手表屏布局、drawable、新 id 和
+   菜单样式幂等覆盖进资源树。新 id 不写入 `public.xml`，由 aapt2 另行分配，
+   母版既有 id、`binding_n` 标签和控件类型保持不变，DataBinding 映射不受影响。
 3. apktool 重建母版 APK。
 4. Python zip 注入替换 `classes2.dex`。
 5. zipalign、apksigner 签名并验证。
 
-原始 APK、反编译树和签名密钥属于本机工作区；公开仓库只保留 bridge 源码、补丁和文档。
+原始 APK、反编译树和签名密钥属于本机工作区；公开仓库只保留 bridge 源码、
+`res-overlay/` 资源、补丁脚本和文档，由 `scripts/sync_publish.py` 固定该子集。

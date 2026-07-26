@@ -175,6 +175,63 @@
 - APK：`artifacts/build/suixinyiting-network-1.3.0.apk`；SHA-256：`DB2E9B8843D33EFB85F151139F2B1C42780A75428484C8ADE5452118B38BF06B`。
 - 版本文档：`docs/bugfixes/1.3.0.md`。
 
+## 1.5.0 - 手表 UI 重构与系统媒体音量归一
+
+### 需求范围
+
+- UI-005/UI-008：播放页、歌词页、音量面板、菜单和资料库按 378x496 手表屏重构。
+- AUDIO-004：系统媒体音量成为唯一控制源，界面与实际响度一致。
+- NFR-007/NFR-008/NFR-009：切页、歌词滚动和列表滚动流畅，稳态省电。
+- ENV-001：手表网络 ADB 常驻。
+
+### 基线
+
+- 2026-07-26：真机 `dumpsys media.audio_policy` 读到 OWW221 的 `STREAM_MUSIC`
+  耳机曲线为 `(1,-58dB) (20,-40dB) (60,-17dB) (100,-2dB)`；应用另加
+  `index/max` 线性增益构成二次衰减，A2DP 3/16 档由 -41 dB 掉到约 -55 dB。
+- 2026-07-26：确认 Activity 从未调用 `setVolumeControlStream()`，注入
+  `KEYCODE_VOLUME_UP` 时 `STREAM_MUSIC` 不变。
+- 2026-07-26：确认播放页传输键为 50/58dp，在 189dp 宽面板上占满整行；
+  音质被塞进 `@id/artist` 并压到 8sp；无已播/总时长。
+- 2026-07-26：确认资料库 `getView()` 忽略 `convertView`，1242 行每格重建视图树。
+
+### 实现记录
+
+- 2026-07-26：播放器恒定 unity 增益，仅保留防爆音渐入；新增
+  `ACTION_ADJUST_VOLUME`/`ACTION_SET_VOLUME`，状态广播携带 `volume`/`volumeMax`。
+- 2026-07-26：`MainActivity` 与 `NetworkMusicActivity` 设置
+  `setVolumeControlStream(STREAM_MUSIC)`。
+- 2026-07-26：重写 `fragment_activity_main_play.xml`、
+  `fragment_activity_main_lyric.xml`、`dialog_volume.xml`，调整
+  `activity_main.xml` 音量浮层与封面背板，缩放 `ItemMenuImage`/`ItemMenuTitle`。
+- 2026-07-26：bridge 改为一次性解析资源 id、按 Activity 缓存视图；
+  歌词高亮改为移动 `ForegroundColorSpan`；封面与歌词滚动容器改为读取 XML 节点。
+- 2026-07-26：资料库改用 ViewHolder 复用，封面按 `?param=120y120` 取缩略图。
+- 2026-07-26：资源改动集中到 `res-overlay/`，由 `patch_suixin.py` 的
+  `patch_watch_ui()` 幂等覆盖，保证从干净反编译可复现。
+
+### 真机记录
+
+- 覆盖安装 `versionCode 10500 / versionName 1.5.0`，登录与 `1242/1242` 保留。
+- 应用内滑条把 `STREAM_MUSIC` 由 `5` 调到 `9`，日志恒为 `output gain=1.0 (unity)`。
+- 播放页 20 秒稳态：20 帧、`Slow UI thread 1`、P95 34ms、Missed Vsync 0；
+  修复每秒重新布局前为 `Slow UI thread 11`、P95 44ms。
+- 资料库滚动：561 帧、`3.92%` janky、P50 5ms、P95 13ms、Missed Vsync 0；
+  加入行复用前为 `8.39%` janky、P95 17ms。
+- 暂停 20 秒新增渲染帧 0；无 `FATAL EXCEPTION`。
+- APK SHA-256：`762167FBD1717AB37A677BC7DD99C6B9FB12F1EAA0DD3E0F67B8D0F341EC8FF8`。
+- 版本文档：`docs/bugfixes/1.5.0.md`。
+
+### 环境与限制
+
+- 手表为 production `user` 构建：`setprop persist.adb.tcp.port` 被拒绝，
+  `settings put global adb_wifi_enabled 1` 被框架回滚为 0，网络 ADB 无法写进手表。
+  常驻改由 PC 侧 `scripts/watch_adb_keepalive.ps1` 保活，掉线自动重连，
+  接上 USB 时自动重新 `adb tcpip 5555` 并回读 wlan0 地址。
+- 歌词页独立 `gfxinfo` 场景未采到：测试期间手表运行「自由记录」运动会话，
+  系统层抢占横向手势，注入翻页多次被切到系统应用。
+- 表冠旋转无法用 `adb input` 注入 `AXIS_SCROLL`，表冠调音与滚动歌词需佩戴实测。
+
 ## 1.4.0 - 持久缓存与播放稳定版（进行中）
 
 ### 需求范围
