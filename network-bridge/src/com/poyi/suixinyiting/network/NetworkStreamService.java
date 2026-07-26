@@ -725,19 +725,7 @@ public final class NetworkStreamService extends Service {
     }
 
     private int lyricIndex(long position) {
-        int low = 0;
-        int high = lyricTimes.length - 1;
-        int result = 0;
-        while (low <= high) {
-            int middle = (low + high) >>> 1;
-            if (lyricTimes[middle] <= position) {
-                result = middle;
-                low = middle + 1;
-            } else {
-                high = middle - 1;
-            }
-        }
-        return result;
+        return LyricIndex.at(lyricTimes, position);
     }
 
     private void updateTicker(boolean playing) {
@@ -929,26 +917,10 @@ public final class NetworkStreamService extends Service {
     @Override public IBinder onBind(Intent intent) { return null; }
 
     private static String encodeIds(long[] ids) {
-        StringBuilder out = new StringBuilder();
-        for (long id : ids) {
-            if (out.length() > 0) out.append(',');
-            out.append(id);
-        }
-        return out.toString();
+        return IdCodec.encode(ids);
     }
 
     private static long[] decodeIds(String encoded) {
-        if (encoded == null || encoded.trim().isEmpty()) return new long[0];
-        String[] parts = encoded.split(",");
-        long[] values = new long[parts.length];
-        int count = 0;
-        for (String part : parts) try {
-            long value = Long.parseLong(part.trim());
-            if (value > 0) values[count++] = value;
-        } catch (NumberFormatException ignored) {}
-        if (count == values.length) return values;
-        long[] compact = new long[count];
-        System.arraycopy(values, 0, compact, 0, count);
-        return compact;
+        return IdCodec.decode(encoded);
     }
 }

@@ -33,6 +33,7 @@ TREES = (
     ("analysis", "**/*.md"),
     ("analysis", "**/*.csv"),
     ("network-bridge/src", "**/*.java"),
+    ("network-bridge/test", "**/*.java"),
     ("res-overlay", "**/*.xml"),
     ("scripts", "*.py"),
     ("scripts", "*.ps1"),

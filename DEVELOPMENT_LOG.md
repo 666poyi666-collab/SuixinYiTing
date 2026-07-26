@@ -175,6 +175,38 @@
 - APK：`artifacts/build/suixinyiting-network-1.3.0.apk`；SHA-256：`DB2E9B8843D33EFB85F151139F2B1C42780A75428484C8ADE5452118B38BF06B`。
 - 版本文档：`docs/bugfixes/1.3.0.md`。
 
+## 1.5.2 - 离线测试基线与可测性重构（进行中）
+
+### 需求范围
+
+- 长期项目根基：为反复出过 30+ Bug 的代码建立自动化回归测试（此前为零）。
+- 旧功能代码可测性：将 Service 内的纯逻辑抽成可单测的小类。
+
+### 实现记录
+
+- 2026-07-26：从 `NetworkStreamService` 抽出两个纯逻辑类，Service 仅委托，
+  行为不变：`IdCodec`（队列 id 编解码）、`LyricIndex`（歌词二分查找）。
+- 2026-07-26：搭建离线单元测试 harness（无需 gradle/设备）：
+  `scripts/run_bridge_tests.ps1` 把 `network-bridge/src` 主源码与
+  `network-bridge/test` 的 JUnit4 测试一起编译到 android.jar + JUnit，
+  桌面 JVM 运行；`FakeSharedPreferences` 让 `ShuffleBag` 跑真实持久化路径，
+  运行时不触碰 android.jar 桩方法。
+- 2026-07-26：36 个 bridge 单测覆盖 `ShuffleBag`（1230 首一轮不重复、
+  上一/下一/选择一致、服务重启持久化恢复、空/单曲/越界）、`QualityPolicy`
+  （降档单调、标签、低档不越级——1.2.1 老 Bug 的回归锚点）、`AudioCacheKey`
+  （键稳定、trim/lowercase 归一、各字段区分、null 安全）、`IdCodec`
+  （往返、脏数据/非正 id 丢弃）、`LyricIndex`（边界、与线性扫描一致）。
+- 2026-07-26：`scripts/test_patch_suixin.py` 6 项补丁流水线回归：两次运行幂等、
+  版本号、去品牌无残留、动画样式挂载、图标渐变（圆底刷新 + 纯字形不动）、
+  手表 UI id/封面注入。`scripts/run_all_tests.ps1` 作为发布前统一回归门槛。
+- 结果：42 个测试全绿；未在核心逻辑发现新 Bug（洗牌/音质/缓存/编解码/歌词
+  均正确），价值在于此后回归保护。测试类在 `network-bridge/test/`，不在 `src/`，
+  不进 APK。
+- 版本 `1.5.2 / 10502`（源码进行中，未发 Release）；抽取后完整 APK 构建通过
+  SHA-256 `A89569CB1C563E158DBDB24FC40018034EF2F93BC96D5B99D9B17C5A0E1D0CAA`。
+  待设置页功能修复（需手表空闲）一并发 1.5.2 Release。
+- 文档：`docs/DEVELOPMENT_GUIDE.md` 第 9 节「自动化测试」。
+
 ## 1.5.1 - 设置页去品牌与全局过渡动画
 
 ### 需求范围

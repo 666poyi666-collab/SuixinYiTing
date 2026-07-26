@@ -181,7 +181,32 @@ adb -s $device pull /sdcard/window.xml artifacts\build\window.xml
 - 会话存储格式变化要兼容旧值或提供明确重新登录流程。
 - 清缓存、退出登录、重置资料库必须是三个不同操作。
 
-## 9. 代码检查
+## 9. 自动化测试
+
+离线可跑，不需要设备。发布前作为回归门槛执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_all_tests.ps1
+```
+
+包含两套：
+
+- **bridge 单元测试**（`scripts\run_bridge_tests.ps1`）：把 `network-bridge\src`
+  主源码与 `network-bridge\test` 的 JUnit4 测试一起编译到 android.jar + junit，
+  在桌面 JVM 上运行。只覆盖纯逻辑或仅经接口依赖 Android 的类
+  （用内存版 `FakeSharedPreferences`），运行时不触碰任何 android.jar 桩方法。
+  覆盖：`ShuffleBag`（一轮不重复、上一/下一/选择一致、持久化恢复、
+  边界）、`QualityPolicy`（降档顺序与标签）、`AudioCacheKey`（键稳定与归一）、
+  `IdCodec`（队列编解码，脏数据不污染曲池）、`LyricIndex`（歌词二分边界）。
+- **补丁流水线测试**（`scripts\test_patch_suixin.py`）：在当前反编译树上
+  跑 `patch_suixin.py` 两次，断言幂等、版本号、去品牌无残留、动画样式挂载、
+  图标渐变（圆底刷新、纯字形不动）与手表 UI id/封面注入。
+
+新增可测的纯逻辑时，优先抽成不依赖 Android 的小类（见 `IdCodec`、`LyricIndex`
+从 `NetworkStreamService` 抽出的方式），再补 JUnit 测试并加入
+`run_bridge_tests.ps1` 的 `$suites`。
+
+## 10. 代码检查
 
 发布前至少执行：
 
@@ -193,7 +218,7 @@ Get-FileHash artifacts\build\suixinyiting-network-<version>.apk -Algorithm SHA25
 
 公开仓库还要确认 `.gitignore` 排除 keystore、APK、DEX、反编译树、缓存和本机会话。
 
-## 10. 故障处理
+## 11. 故障处理
 
 - 构建失败：保留首个有效错误，修正后从失败阶段重新执行，不安装旧/半成品。
 - 安装签名不匹配：核对 keystore，不通过卸载规避数据迁移验证。
