@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Dialog / popup window enter. Dialogs read windowEnterAnimation, so keep this
+    a plain fade with a tiny rise instead of the activity slide, which would look
+    wrong sliding a centered sheet in from the edge.
+-->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shareInterpolator="false">
+    <alpha
+        android:duration="150"
+        android:fromAlpha="0.0"
+        android:toAlpha="1.0"
+        android:interpolator="@android:interpolator/decelerate_cubic" />
+    <translate
+        android:duration="180"
+        android:fromYDelta="6%p"
+        android:toYDelta="0"
+        android:interpolator="@android:interpolator/decelerate_quint" />
+</set>

@@ -152,8 +152,8 @@ def patch_brand(root: Path) -> int:
 def patch_version(root: Path) -> None:
     yml = root / "apktool.yml"
     text = yml.read_text(encoding="utf-8")
-    text = re.sub(r"(?m)^  versionCode: .*?$", "  versionCode: 10500", text)
-    text = re.sub(r"(?m)^  versionName: .*?$", "  versionName: 1.5.0", text)
+    text = re.sub(r"(?m)^  versionCode: .*?$", "  versionCode: 10501", text)
+    text = re.sub(r"(?m)^  versionName: .*?$", "  versionName: 1.5.1", text)
     yml.write_text(text, encoding="utf-8", newline="\n")
 
 
@@ -650,6 +650,130 @@ def patch_watch_ui(root: Path) -> list[str]:
         )
         main.write_text(text, encoding="utf-8", newline="\n")
         touched.append(str(main))
+
+    touched += patch_settings_ui(root)
+    return touched
+
+
+SETTINGS_ANIM_STYLE = """    <style name="SuixinActivityAnimation">
+        <item name="android:activityOpenEnterAnimation">@anim/suixin_activity_open_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/suixin_activity_open_exit</item>
+        <item name="android:activityCloseEnterAnimation">@anim/suixin_activity_close_enter</item>
+        <item name="android:activityCloseExitAnimation">@anim/suixin_activity_close_exit</item>
+        <item name="android:windowEnterAnimation">@anim/suixin_window_enter</item>
+        <item name="android:windowExitAnimation">@anim/suixin_window_exit</item>
+    </style>
+"""
+
+
+def patch_settings_ui(root: Path) -> list[str]:
+    """Settings/branding polish: page transitions and author de-branding.
+
+    The activity transitions are attached to the app theme once, so every
+    page (settings and the rest) gets the same lightweight slide+fade. The
+    animations are pure window translate/alpha, composited off the UI thread.
+    """
+    touched: list[str] = []
+    res = root / "res"
+
+    # 1. Register the animation style and hook it into the base theme exactly once.
+    styles = res / "values" / "styles.xml"
+    text = styles.read_text(encoding="utf-8")
+    if "SuixinActivityAnimation" not in text:
+        text = text.replace(
+            "</resources>", SETTINGS_ANIM_STYLE + "</resources>", 1
+        )
+    if "android:windowAnimationStyle" not in text:
+        text = text.replace(
+            '<style name="Base.Theme.ZeroMusic" parent="@style/Theme.AppCompat.NoActionBar">',
+            '<style name="Base.Theme.ZeroMusic" parent="@style/Theme.AppCompat.NoActionBar">\n'
+            '        <item name="android:windowAnimationStyle">@style/SuixinActivityAnimation</item>',
+            1,
+        )
+    styles.write_text(text, encoding="utf-8", newline="\n")
+    touched.append(str(styles))
+
+    # 2. Drop the master's hardcoded ICP filing number on the About page; it is
+    #    the original author's registration and has no place in this build.
+    about = res / "layout" / "activity_setting_about.xml"
+    if about.exists():
+        text = about.read_text(encoding="utf-8")
+        text = re.sub(
+            r'\s*<TextView[^>]*android:text="粤ICP备2023066011号-5A"[^>]*/>',
+            "",
+            text,
+        )
+        text = text.replace("Developed by 随心一听社区", "随心一听 · 开源社区")
+        about.write_text(text, encoding="utf-8", newline="\n")
+        touched.append(str(about))
+
+    touched += patch_icons(root)
+    return touched
+
+
+# The master ships every settings/menu icon as a flat #6186fc disc plus a white
+# glyph. Give the disc a subtle top-lit diagonal gradient so the icons read as
+# one refreshed set with a bit of depth, without touching the glyphs. A vector
+# gradient is still a single compiled drawable — no extra draw cost at runtime.
+# The discs differ in viewport (160/165/70) and attribute order, so the disc is
+# matched by regex and the gradient endpoints are scaled to each viewport.
+# Only the full-circle background disc (pathData starts at "M0,") gets the
+# gradient. The ic_default_menu_* icons are disc-less blue glyphs (their paths
+# start at non-zero coordinates) and must keep their flat fill.
+ICON_DISC_RE = re.compile(
+    r'<path\b(?=[^>]*android:fillColor="#6186fc")(?=[^>]*android:pathData="M0,)([^>]*?)\s*/>'
+)
+VIEWPORT_RE = re.compile(
+    r'android:viewportWidth="([\d.]+)"\s+android:viewportHeight="([\d.]+)"'
+)
+
+
+def patch_icons(root: Path) -> list[str]:
+    """Refresh the settings/menu icon discs with a top-lit gradient (idempotent)."""
+    touched: list[str] = []
+    icon_dir = root / "res" / "drawable-anydpi-v24"
+    if not icon_dir.exists():
+        return touched
+    for icon in sorted(icon_dir.glob("ic_default_*.xml")):
+        if icon.name.endswith("_foreground.xml"):
+            continue
+        text = icon.read_text(encoding="utf-8")
+        if '#6186fc' not in text:
+            continue  # already refreshed or a glyph-only icon with no disc
+        vp = VIEWPORT_RE.search(text)
+        if not vp:
+            continue
+        vw, vh = float(vp.group(1)), float(vp.group(2))
+        sx, sy = round(vw * 0.16, 1), round(vh * 0.06, 1)
+        ex, ey = round(vw * 0.88, 1), round(vh * 0.95, 1)
+
+        def to_gradient(match: "re.Match[str]") -> str:
+            # Drop the flat fill; the gradient replaces it.
+            attrs = re.sub(
+                r'\s*android:fillColor="#6186fc"', "", match.group(1)
+            )
+            return (
+                f"<path{attrs}>\n"
+                '        <aapt:attr name="android:fillColor">\n'
+                f'            <gradient android:type="linear" android:startX="{sx}" '
+                f'android:startY="{sy}" android:endX="{ex}" android:endY="{ey}" '
+                'android:startColor="#7FA0FF" android:endColor="#4762EC" />\n'
+                "        </aapt:attr>\n"
+                "    </path>"
+            )
+
+        new_text, count = ICON_DISC_RE.subn(to_gradient, text, count=1)
+        if count == 0:
+            continue
+        if "xmlns:aapt" not in new_text:
+            new_text = new_text.replace(
+                'xmlns:android="http://schemas.android.com/apk/res/android">',
+                'xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                '  xmlns:aapt="http://schemas.android.com/aapt">',
+                1,
+            )
+        icon.write_text(new_text, encoding="utf-8", newline="\n")
+        touched.append(str(icon))
     return touched
 
 

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Returning to the previous page on back: slide in from the left, restore alpha. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shareInterpolator="false">
+    <translate
+        android:duration="210"
+        android:fromXDelta="-8%p"
+        android:toXDelta="0"
+        android:interpolator="@android:interpolator/decelerate_quint" />
+    <alpha
+        android:duration="150"
+        android:fromAlpha="0.7"
+        android:toAlpha="1.0"
+        android:interpolator="@android:interpolator/decelerate_cubic" />
+</set>

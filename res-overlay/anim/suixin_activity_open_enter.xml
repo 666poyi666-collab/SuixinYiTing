@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Incoming activity when opening a page. A short slide-from-right plus fade.
+
+    Window transitions are composited on the RenderThread from the captured
+    surface: translate + alpha only, no per-frame measure/layout on the UI
+    thread, so this stays cheap on the watch. 210ms with a decelerate curve
+    reads as snappy rather than slow, and it ends immediately (no looping,
+    no fillAfter) so nothing keeps drawing once the page settles.
+-->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shareInterpolator="false">
+    <translate
+        android:duration="210"
+        android:fromXDelta="16%p"
+        android:toXDelta="0"
+        android:interpolator="@android:interpolator/decelerate_quint" />
+    <alpha
+        android:duration="150"
+        android:fromAlpha="0.0"
+        android:toAlpha="1.0"
+        android:interpolator="@android:interpolator/decelerate_cubic" />
+</set>

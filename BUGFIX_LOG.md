@@ -17,6 +17,7 @@
 | 1.3.0 | 播放页/歌词页流畅度、内存与暂停功耗优化 | `docs/bugfixes/1.3.0.md` | `artifacts/build/suixinyiting-network-1.3.0.apk` |
 | 1.4.0 | 持久块缓存、自适应预取、播放状态与恢复治理 | `docs/bugfixes/1.4.0.md` | `artifacts/build/suixinyiting-network-1.4.0.apk` |
 | 1.5.0 | 手表 UI 重构、系统媒体音量归一与渲染开销治理 | `docs/bugfixes/1.5.0.md` | `artifacts/build/suixinyiting-network-1.5.0.apk` |
+| 1.5.1 | 设置页去品牌、全局过渡动画与图标刷新 | `docs/bugfixes/1.5.1.md` | `artifacts/build/suixinyiting-network-1.5.1.apk` |
 
 跨版本问题、根因、状态和回归锚点统一维护在 `docs/BUG_CATALOG.md`。
 
@@ -56,3 +57,12 @@
 - 歌词高亮改为移动非度量 Span，换行不再重排整首歌词。
 - 手表网络 ADB 由 `scripts/watch_adb_keepalive.ps1` 保活，断线自动重连，
   插上 USB 时自动重新 `adb tcpip`。
+
+## 1.5.1 验收摘要
+
+- 关于页移除原作者备案号，APK 二进制不再含该串；协议/隐私 assets 早已去品牌。
+- 全局窗口过渡动画（活动页滑动+淡入、弹窗淡入），RenderThread 合成、约 200ms、
+  结束即停，低功耗。
+- 17 个圆底图标改为顶部微高光对角渐变，白色字形不变；纯字形 menu_* 图标不动。
+- 环境受限：设置各子页逐项实拍功能测试因手表运动会话持续抢占前台未完成，
+  待手表空闲后重跑。

@@ -175,6 +175,50 @@
 - APK：`artifacts/build/suixinyiting-network-1.3.0.apk`；SHA-256：`DB2E9B8843D33EFB85F151139F2B1C42780A75428484C8ADE5452118B38BF06B`。
 - 版本文档：`docs/bugfixes/1.3.0.md`。
 
+## 1.5.1 - 设置页去品牌与全局过渡动画
+
+### 需求范围
+
+- 设置页品牌去标识化：清除原作者残留。
+- 设置页/全局过渡动画：低功耗、低性能设备也流畅。
+
+### 实现记录
+
+- 2026-07-26：关于页删除原作者硬编码备案号“粤ICP备2023066011号-5A”，
+  “Developed by …”改为“随心一听 · 开源社区”。全树扫描确认协议/隐私 assets
+  已是“随心一听开源社区”，无 sky233/晞云/零度/lightxi 残留（sky130 仅为
+  widget 内部包名，不可见，不改）。
+- 2026-07-26：新增窗口过渡动画并挂到 App 主题 `Base.Theme.ZeroMusic`：
+  活动页开/关用滑动+淡入淡出（`activityOpen/Close*Animation`），
+  弹窗用纯淡入淡出（`windowEnter/ExitAnimation`），均为窗口 translate/alpha，
+  RenderThread 合成、约 200ms、结束即停，不常驻重绘。
+- 资源集中在 `res-overlay/anim/` 与 `patch_settings_ui()`，从干净反编译可复现。
+- 2026-07-26：图标刷新。母版 17 个圆底图标（设置/菜单/播放列表：扫描、界面、
+  主题、文件传输、歌词、播放、帮助、关于、定时、专辑、歌手、设置、均衡器、
+  音乐库、播放队列、播放列表、完整功能）由纯色 `#6186fc` 圆底改为自上而下
+  对角渐变（`#7FA0FF`→`#4762EC`），字形保持白色不变。渐变端点按各图标 viewport
+  等比缩放（160/165/70 均适配）；`ic_default_menu_*` 为无圆底纯字形，按
+  `pathData` 是否 `M0,` 起始精确排除，保持原样。矢量渐变仍是单个编译 drawable，
+  运行时零额外绘制。由 `patch_icons()` 幂等生成，aapt2 编译通过。
+- 图标离线预览：`artifacts/icons_preview.png`（Chrome headless 渲染矢量校验）。
+
+### 构建与静态验证
+
+- 覆盖安装 `versionCode 10501 / versionName 1.5.1` 成功，App 正常启动不崩溃。
+- APK 二进制不再含“2023066011”；6 个 `res/anim/suixin_*` 动画已打包。
+- APK SHA-256：`29017407E8BD594F59DC203D0C689DF351E7317A1A96389A31AC008C8B9041ED`。
+
+### 环境阻塞（未完成项）
+
+- 设置页各子页（界面/主题/文件传输/播放/歌词/扫描/帮助/关于）的逐项**实拍
+  功能测试未完成**：测试期间手表上 `com.poyi.watchintervals` 有正在进行的
+  运动会话（`WorkoutService` 前台）并持续把自身活动拉回前台，`app.focuslink`
+  桥接服务同样抢占前台，音乐 App 无法稳定停留。结束他人运动数据不安全、
+  `pm disable-user` 被策略拒绝，故该审计需在手表空闲（结束运动会话）后重跑。
+- 设置项列表由混淆 ViewModel（`smali/androidx/lifecycle/ࡤ.smali`）按索引构建，
+  重排/改目标需 smali 手术，风险高，未做。均衡器/左右声道/压限器等 DSP 仍绑定
+  本地播放器 audio session（AUDIO-006，长期待开发），未接入网络播放链路。
+
 ## 1.5.0 - 手表 UI 重构与系统媒体音量归一
 
 ### 需求范围
