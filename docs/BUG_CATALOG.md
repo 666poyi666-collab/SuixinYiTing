@@ -40,6 +40,7 @@
 | BUG-034 | S2 | 1242 行资料库滚动掉帧 | `getView()` 忽略 convertView，每格重建视图树；封面按原图解码 | 已修复 1.5.0 | ViewHolder 复用 + 120px 服务端缩略图；滚动 8.39% → 3.92% janky |
 | BUG-035 | S3 | 播放页六个按钮完全贴合无间距 | 同时声明 `layout_margin` 与单边 margin，MarginLayoutParams 忽略单边值 | 已修复 1.5.0 | 删除 `layout_margin`，只保留单边 margin |
 | BUG-036 | S3 | 菜单“我喜欢的音乐”被截断 | ItemMenuTitle 19sp 配 45dp 图标超出 189dp 面板 | 已修复 1.5.0 | 图标 34dp、标题 15sp，单屏可见项 3 → 4 |
+| BUG-037 | S2 | 多时间戳歌词行时间丢失且文本混入 `[...]`，乱序时高亮错行 | 旧解析正则只取首个时间戳并把余下标签当文本；且不排序，违反 LyricIndex 二分升序前提 | 已修复 1.5.2 | 抽出 `LrcParser`：每个前导标签各生成一条、按时间排序；10 项单测覆盖 |
 
 ## Bug 处理规则
 

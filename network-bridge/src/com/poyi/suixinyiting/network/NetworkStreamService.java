@@ -25,9 +25,6 @@ import android.util.Log;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.ArrayList;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class NetworkStreamService extends Service {
     private static final String VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION";
@@ -691,23 +688,8 @@ public final class NetworkStreamService extends Service {
     }
 
     private static LyricData parseLyricData(String raw) {
-        ArrayList<Long> times = new ArrayList<>();
-        ArrayList<String> lines = new ArrayList<>();
-        Pattern pattern = Pattern.compile("\\[(\\d+):(\\d+(?:\\.\\d+)?)\\](.*)");
-        if (raw != null) for (String row : raw.split("\\n")) {
-            Matcher matcher = pattern.matcher(row.trim());
-            if (!matcher.matches()) continue;
-            long minute = Long.parseLong(matcher.group(1));
-            double second = Double.parseDouble(matcher.group(2));
-            String text = matcher.group(3).trim();
-            if (text.isEmpty()) continue;
-            times.add(minute * 60000L + (long) (second * 1000.0));
-            lines.add(text);
-        }
-        long[] parsedTimes = new long[times.size()];
-        String[] parsedLines = lines.toArray(new String[0]);
-        for (int i = 0; i < times.size(); i++) parsedTimes[i] = times.get(i);
-        return new LyricData(parsedTimes, parsedLines);
+        LrcParser.Result result = LrcParser.parse(raw);
+        return new LyricData(result.times, result.lines);
     }
 
     private static final class LyricData {
