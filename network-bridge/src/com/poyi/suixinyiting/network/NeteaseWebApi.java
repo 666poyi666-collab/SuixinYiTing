@@ -274,41 +274,11 @@ public final class NeteaseWebApi implements NetworkMusicSource, StreamResolver {
     }
 
     private static String mergeCookies(String oldValue, String newValue) {
-        java.util.LinkedHashMap<String,String> map = new java.util.LinkedHashMap<>();
-        for (String source : new String[]{oldValue, newValue}) for (String part : source.split(";")) {
-            String item = part.trim();
-            int split = item.indexOf('=');
-            if (split > 0 && !isCookieAttribute(item.substring(0, split)))
-                map.put(item.substring(0, split), item.substring(split + 1));
-        }
-        StringBuilder out = new StringBuilder();
-        for (java.util.Map.Entry<String,String> e : map.entrySet()) {
-            if (out.length() > 0) out.append("; ");
-            out.append(e.getKey()).append('=').append(e.getValue());
-        }
-        return out.toString();
-    }
-
-    private static boolean isCookieAttribute(String name) {
-        return "path".equalsIgnoreCase(name) || "domain".equalsIgnoreCase(name)
-                || "expires".equalsIgnoreCase(name) || "max-age".equalsIgnoreCase(name)
-                || "samesite".equalsIgnoreCase(name);
+        return Cookies.merge(oldValue, newValue);
     }
 
     private static String removeCookie(String cookie, String name) {
-        java.util.LinkedHashMap<String,String> map = new java.util.LinkedHashMap<>();
-        for (String part : cookie.split(";")) {
-            String item = part.trim();
-            int split = item.indexOf('=');
-            if (split > 0 && !name.equals(item.substring(0, split)))
-                map.put(item.substring(0, split), item.substring(split + 1));
-        }
-        StringBuilder out = new StringBuilder();
-        for (java.util.Map.Entry<String,String> e : map.entrySet()) {
-            if (out.length() > 0) out.append("; ");
-            out.append(e.getKey()).append('=').append(e.getValue());
-        }
-        return out.toString();
+        return Cookies.remove(cookie, name);
     }
 
     private String watchLoginUrl(String key) throws Exception {
@@ -339,19 +309,11 @@ public final class NeteaseWebApi implements NetworkMusicSource, StreamResolver {
     }
 
     private static boolean containsLoginCredential(String cookie) {
-        return !cookieValue(cookie, "MUSIC_U").isEmpty()
-                || !cookieValue(cookie, "MUSIC_A").isEmpty();
+        return Cookies.hasLoginCredential(cookie);
     }
 
     private static String cookieValue(String cookie, String name) {
-        if (cookie == null) return "";
-        for (String part : cookie.split(";")) {
-            String item = part.trim();
-            int split = item.indexOf('=');
-            if (split > 0 && name.equals(item.substring(0, split)))
-                return item.substring(split + 1);
-        }
-        return "";
+        return Cookies.value(cookie, name);
     }
 
     private static String randomSecret() {

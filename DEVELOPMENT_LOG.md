@@ -204,7 +204,12 @@
   方括号），且不排序（违反 `LyricIndex` 二分查找的升序前提，可能高亮错行）。
   新解析对每个前导标签各生成一条并按时间排序，Service 委托，其余行为不变；
   新增 10 项 `LrcParser` 单测。
-- 结果：52 个测试全绿；洗牌/音质/缓存/编解码逻辑无新 Bug，歌词解析修复上述真 Bug，
+- 2026-07-26：加固 BUG-038。抽出 `Cookies` 会话 cookie 工具（merge/remove/value/
+  hasLoginCredential/isAttribute），NeteaseWebApi 委托。加会话保护防御：合并时
+  空值不再覆盖已有非空凭证——防止服务端 `Set-Cookie: MUSIC_U=;` 意外清掉登录
+  （本 App 用显式 logout，不依赖服务端清 cookie，契合 LIB-002）。登录建立仍用
+  非空真值覆盖，不受影响；新增 12 项 `Cookies` 单测。
+- 结果：58 个测试全绿；洗牌/音质/缓存/编解码逻辑无新 Bug，歌词解析修复上述真 Bug，
   测试价值在于此后回归保护。测试类在 `network-bridge/test/`，不在 `src/`，
   不进 APK。
 - 版本 `1.5.2 / 10502`（源码进行中，未发 Release）；抽取后完整 APK 构建通过

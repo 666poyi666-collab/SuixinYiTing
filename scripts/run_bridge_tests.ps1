@@ -68,7 +68,8 @@ $suites = @(
     'com.poyi.suixinyiting.network.AudioCacheKeyTest',
     'com.poyi.suixinyiting.network.IdCodecTest',
     'com.poyi.suixinyiting.network.LyricIndexTest',
-    'com.poyi.suixinyiting.network.LrcParserTest'
+    'com.poyi.suixinyiting.network.LrcParserTest',
+    'com.poyi.suixinyiting.network.CookiesTest'
 )
 & java -classpath $runCp org.junit.runner.JUnitCore @suites
 exit $LASTEXITCODE
